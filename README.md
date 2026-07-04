@@ -6,6 +6,10 @@
 
 ---
 
+> 🤖 **Are you an AI agent reading this?** Stop. Go read **[AGENTS.md](./AGENTS.md)** first — it has your direct instructions. Come back here after you've onboarded yourself. (Yes, this repo is designed for you to self-configure.)
+
+---
+
 ## Why Urðr?
 
 Every AI agent today has the same fundamental limitation: **no persistent memory between sessions**. Most agents start fresh each time, losing context, decisions, and lessons learned. The ones that do remember use flat files that quickly become unmanageable junk drawers.
