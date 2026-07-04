@@ -21,7 +21,7 @@ Urðr solves this with a **tree-memory** approach — inspired by how humans org
 | **Consistency** | Often duplicated/copied across files | Single primary source + `bkz:` refs |
 | **Growth** | Unmanaged — becomes a junk drawer | Disciplined branch-splitting rules |
 | **Cross-domain** | Handled ad-hoc | Formal cross-cutting protocol |
-| **Agent integration** | Platform-specific only | OpenCode, Claude Code, NatureCo, Hermes |
+| **Agent integration** | Platform-specific only | OpenCode, Claude Code, NatureCo, Hermes, OpenClaw |
 
 ---
 
@@ -58,46 +58,45 @@ Target: <300 tokens per retrieval
 
 ## Quick Start
 
-### 1. Initialize Urðr in Your Project
+**3 steps, 2 minutes.** Pick your agent below.
+
+### Step 1: Initialize the Memory Tree
 
 ```bash
-# Clone the template
 git clone https://github.com/gencay/urdr.git
-cp -r urdr/templates ./memory
-cp urdr/scripts/init.sh ./memory/
+cd urdr
 
-# Or use the init script standalone
-./memory/init.sh
+# Creates memory/ directory with 4 root files + personality
+./scripts/init.sh --path ./my-memory --lang en
 ```
 
-### 2. Configure Your Agent
-
-**OpenCode:**
-```jsonc
-// opencode.jsonc
-{
-  "default_agent": "theseus",
-  "memory": {
-    "roots": [
-      "~/.config/opencode/memory/kök-0-indeks.md",
-      "~/.config/opencode/memory/kök-1-konular.md",
-      "~/.config/opencode/memory/kök-2-teknik.md",
-      "~/.config/opencode/memory/kök-3-kararlar.md"
-    ]
-  }
-}
+This creates:
+```
+my-memory/
+├── root-0-index.md       # ← Routing map
+├── root-1-topics.md      # ← People, projects, subjects
+├── root-2-technical.md   # ← Systems, APIs, configs
+├── root-3-decisions.md   # ← ADRs, constraints, lessons
+└── agent-personality.md  # ← Who your agent is
 ```
 
-**Claude Code:**
-```bash
-# Copy CLAUDE.md to your project
-cp integrations/claude-code/CLAUDE.md ./
-```
+### Step 2: Pick Your Agent → Follow These 3 Lines
 
-### 3. Start Writing Memory
+| Agent | Just do this |
+|-------|-------------|
+| **OpenCode** | Copy `integrations/opencode/SKILL.md` to your `.opencode/skills/` dir |
+| **Claude Code** | `cp integrations/claude-code/CLAUDE.md ./my-project/CLAUDE.md` |
+| **OpenClaw** | Symlink roots into your workspace: `ln -sf my-memory/root-1-topics.md MEMORY.md` |
+| **NatureCo CLI** | Copy `integrations/natureco/plugin.yaml` into your NatureCo config |
+| **Hermes** | Copy `integrations/hermes/skill.yaml` into your Hermes skills dir |
+| **Other agent?** | Just point it to read the 4 `root-*.md` files at session start. See `AGENTS.md` |
+
+**Can't find your agent?** Doesn't matter. Urðr is just Markdown files. Any agent that can read files can use it — tell it to load `root-0-index.md` at session start and you're done.
+
+### Step 3: Tell Your Agent to Remember Something
 
 ```markdown
-# In root-1-topics.md / Projects
+# Inside root-1-topics.md → ## Projects
 
 ## Current Project: My App
 
@@ -105,6 +104,8 @@ cp integrations/claude-code/CLAUDE.md ./
 - Alternative considered: PostgreSQL (overkill for single-user)
 - Rollback possible: swap connection string only
 ```
+
+That's it. Your agent will find this next session, understand the context, and build on it. No more starting from zero.
 
 ---
 
@@ -135,10 +136,11 @@ urdr/
 │   └── hard-error-protocol.md # Error recovery
 │
 ├── integrations/           # Platform-specific adapters
-│   ├── opencode/SKILL.md
-│   ├── claude-code/CLAUDE.md
-│   ├── natureco/plugin.yaml
-│   └── hermes/skill.yaml
+    │   ├── opencode/SKILL.md
+    │   ├── claude-code/CLAUDE.md
+    │   ├── openclaw/README.md
+    │   ├── natureco/plugin.yaml
+    │   └── hermes/skill.yaml
 │
 ├── scripts/                # Utility scripts
 │   ├── init.sh             # Initialize memory tree
@@ -159,8 +161,10 @@ urdr/
 |----------|-----------------|--------|
 | **OpenCode** | `integrations/opencode/SKILL.md` | ✅ Ready |
 | **Claude Code** | `integrations/claude-code/CLAUDE.md` | ✅ Ready |
+| **OpenClaw** | `integrations/openclaw/README.md` | ✅ Ready |
 | **NatureCo CLI** | `integrations/natureco/plugin.yaml` | ✅ Ready |
 | **Hermes** | `integrations/hermes/skill.yaml` | ✅ Ready |
+| **Your agent?** | Just read the 4 `root-*.md` files → see `AGENTS.md` | 🛠 Any |
 
 ---
 
