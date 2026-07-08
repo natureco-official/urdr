@@ -1,5 +1,10 @@
 # Urðr — Tree Memory for AI Agents
 
+[![CI](https://github.com/natureco-official/urdr/actions/workflows/ci.yml/badge.svg)](https://github.com/natureco-official/urdr/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)]()
+[![Tooling](https://img.shields.io/badge/tooling-LLM--free-brightgreen)]()
+
 > **"The past is never dead. It's not even past."** — Faulkner
 
 **Urðr** (pronounced *urth*) is an open-source **tree-structured memory architecture** designed for AI coding agents. Named after the Norse Norn of the past who dwells at the root of Yggdrasil, Urðr gives your AI agent a persistent, organized, and fast-retrieval memory system that survives across sessions.
@@ -153,7 +158,8 @@ urdr/
 │   ├── search.mjs          # Last-resort branch-aware search (Node, LLM-free)
 │   ├── bench.mjs           # Retrieval/fidelity benchmark (Node, LLM-free)
 │   ├── append.mjs          # Concurrency-safe leaf writer (lock + atomic)
-│   └── lint.mjs            # Memory health audit (growth/refs/dup, CI guard)
+│   ├── lint.mjs            # Memory health audit (growth/refs/dup, CI guard)
+│   └── selftest.mjs        # Exercises every tool (CI, 3-OS matrix)
 │
 └── examples/               # Practical use cases
     ├── basic-setup/

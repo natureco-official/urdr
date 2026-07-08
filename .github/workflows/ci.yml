@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Every tool, exercised against a temp fixture — proves cross-platform behavior.
+      - name: Self-test (all tools)
+        run: node scripts/selftest.mjs
+
+      # Benchmark doubles as a guard: exits non-zero on any write-fidelity loss.
+      - name: Benchmark (fidelity + recall guard)
+        run: node scripts/bench.mjs --leaves 200 --ambiguity 0.3
+
+      # Health lint must parse the shipped templates without a crash.
+      - name: Lint smoke on templates
+        run: node scripts/lint.mjs templates --json > /dev/null
+        shell: bash
