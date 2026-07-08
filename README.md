@@ -151,7 +151,9 @@ urdr/
 │   ├── check-growth.sh     # Audit branch health
 │   ├── migrate.sh          # Restructure branches
 │   ├── search.mjs          # Last-resort branch-aware search (Node, LLM-free)
-│   └── bench.mjs           # Retrieval/fidelity benchmark (Node, LLM-free)
+│   ├── bench.mjs           # Retrieval/fidelity benchmark (Node, LLM-free)
+│   ├── append.mjs          # Concurrency-safe leaf writer (lock + atomic)
+│   └── lint.mjs            # Memory health audit (growth/refs/dup, CI guard)
 │
 └── examples/               # Practical use cases
     ├── basic-setup/
@@ -226,6 +228,35 @@ node scripts/bench.mjs --leaves 300 --ambiguity 0.3
 ```
 
 Identical results on macOS, Windows, and Linux (deterministic seed). Use it to prove the architecture works at volume — and to catch the growth bottleneck *before* production, not months later when users ask "why doesn't it remember?"
+
+## Concurrency-Safe Writes (`scripts/append.mjs`)
+
+The instant more than one writer touches the same memory, naive "read file → rewrite file" loses data: two writers read the same version, both append, the second write clobbers the first. This is a **real** scenario — a NatureCo gateway runs 8 messaging channels (WhatsApp, Telegram, Signal, IRC, Mattermost, iMessage, SMS + terminal) all writing to one shared tree.
+
+`append.mjs` makes a leaf-append atomic and serialized:
+
+```bash
+node scripts/append.mjs ./my-memory root-2-technical.md "APIs" "**04.07.2026 — chose SQLite — ok**"
+```
+
+- **Advisory lock** via atomic `mkdir` (the one primitive guaranteed atomic on every OS/filesystem); stale locks (crashed writer) are auto-stolen after 30 s.
+- **Append-only** — inserts under the right `## branch` (replacing `_No entries yet._`), never overwrites sibling leaves.
+- **Atomic write** — temp file + `rename`, so a half-written file is never observable.
+
+Verified: 15 concurrent writers → 15 leaves, zero loss, file integrity intact (macOS + Windows).
+
+## Health Lint (`scripts/lint.mjs`)
+
+A cross-platform successor to `check-growth.sh` (bash — doesn't run on stock Windows). One command audits the failure modes that erode retrieval as the tree grows, and exits non-zero on errors (CI/pre-commit guard):
+
+```bash
+node scripts/lint.mjs ./my-memory
+```
+
+1. **Growth** — root > 9 branches, branch > 50 leaves → split signals
+2. **Index bloat** — flags a `root-0-index` that stores leaves instead of mapping (it's read on every retrieval)
+3. **bkz: references** — broken refs (points to a missing root) + over-deep chains
+4. **Duplication** — near-identical leaves in the same root (Jaccard ≥ 0.85) — the "same fact in 5 slightly-different places" drift
 
 ## Design Philosophy
 

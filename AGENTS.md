@@ -74,6 +74,12 @@ When you have an Urðr memory tree, you are expected to:
    - Include: context, alternatives considered, rationale
 ```
 
+> **Concurrent writers?** If your platform has more than one writer to the same tree
+> (e.g. multiple messaging channels + a terminal, all sharing memory), DO NOT hand-write
+> the file — a naive read-then-write races and loses leaves. Use the safe writer:
+> `node scripts/append.mjs <dir> <root-file> "<branch>" "<leaf>"` (advisory lock + atomic
+> rename, append-only). Single writer? Hand-writing is fine.
+
 ### Finding Information (4 Steps, <300 tokens)
 
 ```
@@ -178,7 +184,9 @@ This file should be loaded at session start alongside memory roots. It gives the
 
 ### What If Memory Gets Messy?
 
-1. **Run `check-growth.sh`** — audits all roots for health
+1. **Run `node scripts/lint.mjs <dir>`** — cross-platform health audit: overgrown
+   branches/roots, index bloat, broken `bkz:` refs, and near-duplicate leaves. Exits
+   non-zero on errors, so it doubles as a CI/pre-commit guard.
 2. **Review flagged branches** — are they overgrown? misclassified?
 3. **Run `migrate.sh`** — restructure branches as needed
 4. **Update index** (root-0) if roots were added/removed

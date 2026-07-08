@@ -131,8 +131,9 @@ export function formatResults(res) {
 // "/C:/..." on Windows and never matches process.argv1's "C:\...". (Exactly the kind
 // of cross-platform trap this project exists to help agents avoid.)
 function isMain() {
-  try { return path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1] || ''); }
-  catch { return false; }
+  try {
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1] || '.');
+  } catch { return false; }
 }
 
 if (isMain()) {
