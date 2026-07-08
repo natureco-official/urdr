@@ -157,8 +157,14 @@ When cross-cutting, the primary root is chosen by:
 
 ### NatureCo CLI Agents
 
-- The agent's skill.yaml points to a `memory/` directory
-- Plugin system loads the memory tree at init
+- Memory lives at `~/.natureco/memory/tree/<user>/` and already matches Urðr's model:
+  `0-index.md` + three domain roots `1-kisisel.md` (personal), `2-teknik.md` (technical),
+  `3-kararlar.md` (decisions) — Turkish root names, `## branch` headings, dated leaves.
+- Urðr's tooling works on it as-is (the scripts recognize both `root-N-*` and native
+  `N-name` roots): fallback `node scripts/search.mjs "<kw>" <dir>`, health `lint.mjs`.
+- NatureCo drives several channels writing to ONE shared tree — always append via the
+  concurrency-safe writer (`scripts/append.mjs`), never a naive rewrite.
+- See `integrations/natureco/plugin.yaml` for the exact root/branch binding.
 
 ### Hermes Agents
 

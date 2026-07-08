@@ -1,29 +1,37 @@
 # NatureCo CLI Plugin: Urðr Memory
-# version: 1.0.0
+# version: 1.1.0
 # description: Tree-structured persistent memory for NatureCo CLI agents
+#
+# NOTE: NatureCo ships a native tree-memory whose files already match Urðr's model
+# (an index + 3 domain roots, `## branch` headings, dated leaves). This plugin binds
+# Urðr's tooling (fallback search, health lint) to that native layout — it does NOT
+# require renaming files. Root filenames below reflect NatureCo's actual on-disk names
+# under ~/.natureco/memory/tree/<user>/.
 
 plugin:
   name: urdr-memory
-  version: 1.0.0
+  version: 1.1.0
   type: memory
   author: Gencay
   license: MIT
 
   description: >
-    Provides persistent, tree-structured memory (4 roots, branches, leaves)
-    for NatureCo CLI agents. Information is organized by domain (topics,
-    technical, decisions) with fast retrieval and disciplined growth rules.
+    Persistent, tree-structured memory (index + 3 domain roots, branches, leaves)
+    for NatureCo CLI agents, with a fast hierarchical retrieval protocol, an LLM-free
+    fallback search so information is never unreachable, and a health lint.
+
+  # NatureCo's real tree layout (Turkish root names, as created by memory_tree.js).
+  memory_dir: "~/.natureco/memory/tree/{{user}}"
 
   hooks:
     on_session_start:
       - action: load_memory
         path: "{{memory_dir}}"
         roots:
-          - root-0-index.md
-          - root-1-topics.md
-          - root-2-technical.md
-          - root-3-decisions.md
-        personality: agent-personality.md
+          - 0-index.md
+          - 1-kisisel.md
+          - 2-teknik.md
+          - 3-kararlar.md
         protocols:
           - architecture.md
           - cross-cutting.md
@@ -31,71 +39,51 @@ plugin:
     on_session_end:
       - action: save_memory
         path: "{{memory_dir}}"
-        roots:
-          - root-0-index.md
-          - root-1-topics.md
-          - root-2-technical.md
-          - root-3-decisions.md
+        # Concurrency-safe: NatureCo runs multiple channels writing to one shared tree.
+        writer: "scripts/append.mjs"   # advisory lock + atomic rename + append-only
 
   memory:
     roots:
-      - name: root-0
-        file: root-0-index.md
-        description: Index and routing map
+      - name: 0-index
+        file: 0-index.md
+        description: Index / routing map (root → branch)
+      - name: 1-kisisel
+        file: 1-kisisel.md
+        description: "Kişisel & Tercihler (People, preferences, identity)"
+      - name: 2-teknik
+        file: 2-teknik.md
+        description: "Teknik & Projeler (Projects, systems, technical reference)"
+      - name: 3-kararlar
+        file: 3-kararlar.md
+        description: "Kararlar, Kurallar & Dersler (Decisions, rules, lessons, pending)"
 
-      - name: root-1
-        file: root-1-topics.md
-        description: People, projects, broad subjects
-
-      - name: root-2
-        file: root-2-technical.md
-        description: Systems, APIs, technical references
-
-      - name: root-3
-        file: root-3-decisions.md
-        description: Decisions, constraints, lessons learned
-
+    # NatureCo's actual default branches (Turkish), created by memory_tree.js.
     default_branches:
-      root-1:
-        - "## People"
-        - "## Projects"
-        - "## Organizations"
-      root-2:
-        - "## Systems"
-        - "## Languages"
-        - "## APIs"
-      root-3:
-        - "## Decision Log"
-        - "## Constraints"
-        - "## Lessons Learned"
-        - "## Pending"
+      1-kisisel:
+        - "## Kimlik"
+        - "## Tercihler"
+        - "## İletişim Kalıpları"
+      2-teknik:
+        - "## Projeler"
+        - "## Kurulum & Sistem"
+        - "## Teknik Referans"
+      3-kararlar:
+        - "## Bekleyen İşler"
+        - "## Kararlar"
+        - "## Kurallar & Kısıtlar"
+        - "## Öğrenilen Dersler"
+        - "## Tarihli Olaylar"
 
   commands:
-    init:
-      description: Initialize Urðr memory tree
-      usage: "natureco plugin run urdr-memory init"
-      steps:
-        - create memory directory
-        - copy templates from plugin templates/
-        - create initial branch structure
-        - update agent config
-
-    audit:
-      description: Run growth audit
-      usage: "natureco plugin run urdr-memory audit"
-      steps:
-        - count branches per root
-        - check leaf counts per branch
-        - flag overgrown branches (50+)
-        - flag roots with 9+ branches
-
-    status:
-      description: Show memory tree health
-      usage: "natureco plugin run urdr-memory status"
-      steps:
-        - show root summaries
-        - highlight growth warnings
-        - show last modified dates
+    search:
+      description: "Fallback search — used when the 4-step protocol can't locate a leaf"
+      usage: "node scripts/search.mjs \"<keyword>\" {{memory_dir}}"
+    lint:
+      description: "Memory health audit (growth, index bloat, broken bkz:, duplicates)"
+      usage: "node scripts/lint.mjs {{memory_dir}}"
+    bench:
+      description: "Benchmark retrieval recall + write fidelity at scale"
+      usage: "node scripts/bench.mjs --leaves 300"
 
   protocols:
     architecture: "{{protocol_dir}}/architecture.md"

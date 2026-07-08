@@ -21,7 +21,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT_FILE_RE = /^(root|kök|kok)-\d+.*\.md$/i;
+// Urðr `root-N-*`/`kök-N-*` AND platform-native `N-name` roots (e.g. NatureCo `1-kisisel.md`).
+const ROOT_FILE_RE = /^(?:(?:root|kök|kok)-)?\d[-_].*\.md$/i;
 const MAX_BRANCHES = 9;
 const WARN_LEAVES = 30;
 const MAX_LEAVES = 50;

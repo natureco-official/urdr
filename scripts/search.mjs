@@ -28,7 +28,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const ROOT_FILE_RE = /^(root|kök|kok)-\d+.*\.md$/i;
+// Matches Urðr's `root-N-*` / `kök-N-*` AND platform-native `N-name` roots
+// (e.g. NatureCo ships `0-index.md`, `1-kisisel.md`, `2-teknik.md`). Single-digit
+// root index (0-9) + separator avoids matching stray files like `2024-report.md`.
+const ROOT_FILE_RE = /^(?:(?:root|kök|kok)-)?\d[-_].*\.md$/i;
 
 /** List all root memory files in a directory (root-*.md + Turkish kök-*.md). */
 export function listRootFiles(memoryDir) {
