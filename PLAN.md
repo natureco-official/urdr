@@ -1,82 +1,88 @@
-# PLAN.md — Urðr: tüm bulguları düzelt + tüm önerileri uygula (v1)
+# PLAN.md — Urðr: tüm bulguları düzelt + tüm önerileri uygula (v2, Same Page Meeting round 1 sonrası)
 
-**Core Focus:** ISSUES.md'deki (iki bağımsız incelemenin birleşik listesi) TÜM bug'ları düzelt ve TÜM önerilen özellikleri uygula, ardından gerekli testleri yaz/çalıştır. Kullanıcı kapsamı açıkça onayladı ("tüm sorunları düzeltip tüm önerileride uygulayalım ardından gerekli testleri yapalım") — filtreleme/önceliklendirme YOK, hepsi bu cycle'ın kapsamında.
+**Core Focus:** ISSUES.md'deki (iki bağımsız incelemenin birleşik listesi) TÜM bug'ları düzelt ve TÜM önerilen özellikleri uygula, ardından gerekli testleri yaz/çalıştır. Kullanıcı kapsamı açıkça onayladı.
 
-**Proje:** C:\Projects\urdr-main, git ile github.com/natureco-official/urdr'a bağlandı (içerik zaten origin/main ile birebir aynıydı, sadece git geçmişi eklendi). Yerel `önce oku github.txt` dosyası .gitignore'da, push'a dahil değil.
-
-**AÇIK TASARIM SORUSU (Same Page Meeting'de çözülecek):** Rock 7 (event-log mimarisi) TEMELDE mevcut dosya-okuma modelini değiştiriyor. Rock 1-6'nın bazı düzeltmeleri (özellikle parser/leaf modeli, lint, search) Rock 7'den SONRA gereksiz veya yanlış kapsamda kalabilir. Codex'in bu sıralamaya (7 önce mi sonra mı, yoksa iki aşamalı mı — önce mevcut modeli düzelt/stabilize et, SONRA event-log'u üstüne inşa et) itirazı olacaksa Same Page Meeting'de netleşsin.
+**Round 1 değişiklikleri (bkz. SAME-PAGE-LOG.md):** Rock 7 kademeli alt-adımlara bölündü (ne baştan ne sondan — schema/migrator erken, lint/search/compiler sonra taşınır, MCP en son). Heartbeat fikri terk edildi (senkron writer'da çalışmaz), OS-tabanlı kilit/lease-keeper'a geçildi. YENİ Rock 0: tüm bileşenlerin paylaştığı tek kanonik parser modülü.
 
 ---
 
-## Rock 1 — Core parsing/veri-modeli düzeltmeleri
+## Rock 0 — Paylaşılan Markdown parser/leaf-grammar modülü (YENİ, temel)
+
+**Done looks like:** `scripts/lib/markdown-model.mjs` (veya benzeri) — TEK kanonik parser:
+- Çok satırlı HTML yorumlarını (`<!--...-->` blok) doğru atlıyor.
+- Gerçek "leaf" birimini tanımlıyor (continuation satırları, nested list, table, blockquote, code-fence dahil — tek dolu satır değil).
+- EN (`_No entries yet._`) VE TR (`_Henüz kayıt yok._`) placeholder'ları tanıyor.
+- Sadece parser'ın TANIDIĞI heading node'larını (code-fence dışında) "başlık" sayıyor — ham "##" substring değil.
+- `search.mjs`, `append.mjs`, `lint.mjs` bu modülü kullanacak şekilde REFACTOR edilir (regex kopyalarını kaldırır).
+**Proof:** Golden fixture testleri — çok satırlı yorum, çok satırlı leaf, nested markdown, CRLF, her iki placeholder, tam beklenen "parsed leaf" snapshot'ları. `node scripts/lint.mjs ./templates` → 0 sahte uyarı.
+
+## Rock 1 — Concurrency & durability (revize)
 
 **Done looks like:**
-- `search.mjs`/`lint.mjs`/`append.mjs`: çok satırlı HTML yorumları doğru atlanıyor (sadece ilk satır değil, `<!--...-->` bloğunun TAMAMI).
-- Yaprak (leaf) sınırı doğru tanımlanıyor — her dolu satır değil, gerçek madde işareti/paragraf birimi bir "leaf" sayılıyor.
-- Türkçe (`_Henüz kayıt yok._`) VE İngilizce (`_No entries yet._`) placeholder'lar her ikisi de tanınıyor (search'te atlanıyor, append'te doğru replace ediliyor, lint'te leaf sayılmıyor).
-- Eşik kontrolleri protokolle uyumlu: dal sayısı ≥9 uyarı (>9 değil), leaf sayısı dal başına ≥50 uyarı, ≥30 "yakında bölünmeli" sinyali (growth-rules.md'deki gerçek dille birebir eşleşsin).
-**Dosyalar:** `scripts/search.mjs`, `scripts/append.mjs`, `scripts/lint.mjs`
-**Proof:** `node scripts/lint.mjs ./templates` → 0 sahte uyarı (şu an 37 var, hepsi placeholder yanlış-pozitifi). `node scripts/selftest.mjs` yeşil. Yeni bir Türkçe-özel test senaryosu (append + lint + search Türkçe ağaçta doğru çalışıyor) eklenir ve geçer.
+- Heartbeat YERİNE: OS-tabanlı kilit (ör. Node `proper-lockfile` deseni veya benzeri, platform-native) VEYA ayrı bir lease-keeper alt-process; sahiplik bağımsız süreçlerle test edilebilir (owner-token, renewal-failure, PID-reuse, çalınma, eski-sahip-release senaryoları).
+- `rootFile`: realpath-tabanlı confinement — hedef ve üst dizin resolve edilip memory dizininin GERÇEKTEN altında kaldığı doğrulanıyor (symlink/absolute-path/case-trick bypass'ları kapatılıyor), sadece "../" substring reddi DEĞİL.
+- `leafText`: Rock 0'ın parser'ı üzerinden SADECE gerçek heading node enjeksiyonu reddediliyor (code-fence içindeki "##" veya düz metin serbest).
+- Atomic write: rename öncesi fsync + directory fsync, Windows'a özgü atomic-replace davranışı, hata durumunda temp dosya temizleniyor, orijinal dosya mode/ACL korunuyor.
+**Dosyalar:** `scripts/append.mjs`, YENİ `scripts/lib/lock.mjs`
+**Proof:** Bağımsız süreçlerle kilit-çalma/yenileme-hatası/PID-tekrarı testleri; path-traversal (symlink dahil) ve header-injection için negatif testler; fault-injection (rename ortasında kesinti) testi.
 
-## Rock 2 — Concurrency & durability sertleştirme
-
-**Done looks like:**
-- Lock mekanizmasına owner-token (benzersiz writer ID) + heartbeat eklenir — stale-lock çalma SADECE gerçekten ölü/heartbeat'i durmuş bir writer için olur, canlı-ama-yavaş bir writer'ın kilidi çalınamaz. Release, SADECE kendi owner-token'ını taşıyan kilidi siler (başkasının çalıntı/yeni kilidini yanlışlıkla silmez).
-- Atomic write: rename öncesi `fsync`, hata durumunda temp dosya temizleniyor, orijinal dosyanın mode'u korunuyor.
-- `rootFile` parametresi path-traversal'a karşı doğrulanıyor (sadece memory dizini içinde, `../` reddediliyor).
-- `leafText` içindeki `##` (yeni başlık enjeksiyonu) escape ediliyor veya reddediliyor.
-**Dosyalar:** `scripts/append.mjs`
-**Proof:** Yeni bir test: "canlı ama 30sn+ süren writer'ın kilidi çalınamaz" senaryosunu simüle edip doğrular (owner-token düzeltmesini test eder — mevcut selftest bunu kapsamıyordu). Path-traversal ve header-injection için de negatif testler.
-
-## Rock 3 — migrate.sh / init.sh / check-growth.sh düzeltmeleri
+## Rock 2 — migrate.sh / init.sh / check-growth.sh (revize)
 
 **Done looks like:**
-- `migrate.sh`: BSD-sed yerine `init.sh`'daki gibi cross-platform sed fallback deseni. `split` doğru header formatı üretir. `move` içeriği hedef dalın İÇİNE ekler (dosya sonuna değil). `new-root` protokolün istediği `root-4-<isim>.md` adını üretir (Node regex'iyle eşleşir), kaynaktan siler (kopyalamaz, "single primary" korunur), kısmi hatada rollback yapar.
-- `init.sh`: var olan dosyaları ezmeden önce kontrol/backup, `--lang` değerini doğrular, kullanıcı girdisini sed'e güvenli şekilde geçirir (özel karakter escape), `--no-git`/`--force` bayrakları eklenir, iç içe git repo riski kontrol edilir.
-- `check-growth.sh`: deprecated olduğu için ya TAMAMEN kaldırılır (yerine sadece `lint.mjs` kalır, migrate.sh'daki referansı güncellenir) ya da argüman ayrıştırma hatası düzeltilir — Codex build sırasında karar verir (kaldırmak muhtemelen daha temiz, zaten Node'a geçiş yapılmış).
-**Dosyalar:** `scripts/migrate.sh`, `scripts/init.sh`, `scripts/check-growth.sh` (muhtemelen silinir)
-**Proof:** Her migrate.sh komutu (split/move/new-root) için yeni testler, hem macOS-sed hem GNU-sed'i simüle eden bir ortamda (bu ortam GNU-sed olduğu için en azından burada gerçekten çalıştığı doğrulanır). init.sh için: var olan dosya üzerine yazmama testi, geçersiz --lang reddi testi.
+- `check-growth.sh` **KILL** — tamamen kaldırılıyor, TÜM referansları (protocols, integrations, examples) `lint.mjs`'e güncelleniyor.
+- `migrate.sh` Node'a taşınıyor (`scripts/migrate.mjs`), Rock 0'ın parser'ını ve transaction katmanını kullanıyor (sed/awk mutasyonu yok). `split` non-interactive/plan-file modu alıyor (CI'da test edilebilir). `move` artık açık kaynak+hedef (root VE dal) parametresi alıyor, içeriği GERÇEKTEN hedef dalın içine ekliyor. `new-root` bir sonraki boş root numarasını dinamik buluyor (`root-4-*` hardcode değil), kaynaktan İÇERİĞİ SİLİYOR (kopyalamıyor — single-primary korunuyor), index/referansları AYNI transaction'da güncelliyor, kısmi hatada rollback yapıyor.
+- `init.sh`: preflight-all-then-commit semantiği (hepsini kontrol et, sonra hepsini uygula); `--force` geri-alınabilir backup ile; `--lang` artık İKİ PARALEL AĞAÇ üretmiyor — dil sunum/isimlendirme tercihi, TEK birincil ağaç + alias'lar (`--lang both` kaldırılıyor veya "iki dilde alias dosyaları, tek gerçek kaynak" olarak yeniden tanımlanıyor). Nested-repo tespiti `git rev-parse --show-toplevel` ile; git kimliği yoksa/worktree ise/parent repo varsa konservatif davranış.
+**Dosyalar:** YENİ `scripts/migrate.mjs` (eski `migrate.sh` kaldırılır), `scripts/init.sh`, `scripts/check-growth.sh` (silinir), tüm `protocols/*.md` ve `integrations/**` referansları
+**Proof:** split/move/new-root için golden before/after migration testleri (plan-file modu üzerinden, CI'da tekrarlanabilir). init.sh için: var-olan-dosya-üzerine-yazmama, geçersiz `--lang` reddi, nested-repo/git-kimliği-yok senaryoları.
 
-## Rock 4 — Lint tamlığı + CI sertleştirme
-
-**Done looks like:**
-- `lint.mjs`: dokümante edilen ama uygulanmayan kontroller eklenir — 2-hop `bkz:` zincir derinliği, root'lar arası duplicate tespiti (sadece aynı root değil), hedef dal varlığı doğrulaması.
-- CI: migrate.sh ve init.sh gerçekten test ediliyor (en azından Linux runner'da). `lint.mjs` çıktısı değerlendiriliyor (WARNING'de de exit kodu kontrol ediliyor, sadece "çökmüyor mu" değil). Concurrency/race, CRLF, path-traversal, Türkçe placeholder senaryoları CI'da test ediliyor.
-**Dosyalar:** `scripts/lint.mjs`, `.github/workflows/ci.yml`, `scripts/selftest.mjs` (yeni testler eklenir)
-**Proof:** CI konfigürasyonu yerelde `act` ile veya en azından her adımın komutu manuel çalıştırılarak doğrulanır (gerçek GitHub Actions'a push edilmeden). Yeni lint kontrollerinin gerçek kırık referanslar/duplicate'ler üzerinde doğru çalıştığı gösterilir.
-
-## Rock 5 — Dokümantasyon + entegrasyon tutarlılığı
+## Rock 3 — Lint tamlığı + CI sertleştirme (revize)
 
 **Done looks like:**
-- README'deki `kók-*` → `kök-*` düzeltilir, var olmayan dosyalara referanslar (protocols/mimari.md, examples/project-tracking, examples/technical-reference) ya oluşturulur ya da referans kaldırılır (Codex hangisinin daha uygun olduğuna karar verir — muhtemelen referans kaldırma, gereksiz dosya şişkinliği istemiyoruz).
-- integrations/ altındaki TÜM dosyalar deprecated `check-growth.sh`/grep yerine `lint.mjs`/`search.mjs`'i referans alacak şekilde güncellenir.
-- Hermes entegrasyonu (`always` tüm root yükleme) `<300 token` tasarımıyla uyumlu hale getirilir (lazy/on-demand yükleme).
-- OpenClaw'ın kendi dokümanı içindeki MEMORY.md tanım tutarsızlığı (bir yerde Root-1+Root-3, başka yerde sadece Root-1) tek bir tutarlı tanıma indirilir.
-**Dosyalar:** `README.md`, `integrations/**`, `protocols/**` (referans temizliği)
-**Proof:** Kod okuma ile her referansın gerçekten var olan bir dosyaya/komuta işaret ettiği teyit edilir.
+- 2-hop `bkz:` zincir derinliği: Rock 0/6'nın kanonik referans grameri üzerinden (serbest metin parse yerine) uygulanıyor.
+- Cross-root duplicate: token-index candidate generation (O(n²) pairwise DEĞİL), yapısal referans/bkz: leaf'leri "duplicate" olarak İŞARETLENMİYOR.
+- CI: `--fail-on-warn` AÇIK bir bayrak/politika olarak tanımlanıyor (blanket "her warning fail" değil), golden-fixture/snapshot testleriyle doğrulanıyor. `actionlint` + gerçek bash testleri Linux/macOS runner'larında, Node tool'lar için Windows coverage'ı da var. Otomatik bir dokümantasyon link/referans/komut kontrolcüsü ekleniyor (README ve protocols'taki ölü referansları yakalıyor).
+**Dosyalar:** `scripts/lint.mjs`, `.github/workflows/ci.yml`, YENİ `scripts/lib/doc-check.mjs`
+**Proof:** Yeni kontrollerin gerçek kırık referans/duplicate senaryolarında doğru çalıştığı golden-fixture testleriyle gösteriliyor.
 
-## Rock 6 — Hibrit retrieval + gerçek benchmark + telemetri
-
-**Done looks like:**
-- `search.mjs`: BM25/trigram tabanlı skorlama eklenir (mevcut literal regex fallback olarak kalır), typo toleransı (basit edit-distance), ReDoS'a açık regex desenleri güvenli hale getirilir.
-- `bench.mjs`: metodoloji düzeltilir — "write fidelity" gerçek `append.mjs` çağrılarıyla ölçülür (writeFileSync bypass değil), "hierarchy-only" recall gerçekten SADECE doğru root'a bakarak ölçülür (önce tüm ağacı tarayıp sonra filtrelemez), sentetik veri artık her leaf'e benzersiz anahtar vermez (gerçekçi ambiguity senaryoları).
-- Basit bir kullanım-telemetrisi (yerel, opsiyonel) — hangi sorgu hiyerarşiyle hangisi fallback'le bulundu, hangi sorgular sonuçsuz kaldı, `.urdr-telemetry.jsonl` gibi yerel bir dosyaya (opt-in) yazılır.
-**Dosyalar:** `scripts/search.mjs`, `scripts/bench.mjs`, YENİ `scripts/telemetry.mjs` (opsiyonel modül)
-**Proof:** Düzeltilmiş bench.mjs'in ESKİ ve YENİ sonuçları karşılaştırmalı raporlanır (metodoloji farkının gerçek etkisini göstermek için). Typo-toleranslı arama için pozitif/negatif test senaryoları.
-
-## Rock 7 — Event-log mimarisi (stable ID + provenance + transaction + forgetting + memory-compiler) + MCP server paketlemesi
+## Rock 4 — Dokümantasyon + entegrasyon tutarlılığı (revize)
 
 **Done looks like:**
-- Her leaf'e kalıcı, değişmez bir ID atanır (dosya/dal yeniden adlandırılsa bile kırılmaz).
-- `supersedes`/`derived-from`/`conflicts-with` ilişkileri leaf metadata'sında tutulur.
-- Append-only bir olay günlüğü (ör. `.urdr/events.jsonl`, checksummed) asıl doğruluk kaynağı olur; root Markdown dosyaları bu günlükten türetilen "materialized view"lardır (insan hâlâ Markdown okur/düzenler, ama sistem event log'u referans alır).
-- Her leaf'te provenance/epistemik durum (kaynak, oluşturan ajan, zaman, güven düzeyi, doğrulama durumu) tutulur.
-- Cross-cutting kuralının gerektirdiği "primary + birkaç bkz:" çoklu-dosya yazımı TEK atomik transaction'da yapılır (ya hepsi görünür olur ya hiçbiri).
-- Retention/forgetting politikası: leaf'lere retention sınıfı atanabilir, kullanıcı-tetiklemeli "unut" komutu, hassas veri redaksiyonu.
-- `lint.mjs`'in bulduğu sorunlar için "memory compiler" dry-run modu: somut bir düzeltme planı (dal bölme önerisi, index diff'i, kırık referans düzeltmesi) üretir, onay sonrası tek transaction'da uygular.
-- search/append/lint/compiler işlemleri bir MCP server olarak paketlenir (Claude Desktop/Code, Cursor gibi ortamlarda doğrudan tool call ile kullanılabilir — shell'den manuel çağırma gerekmez).
-**Dosyalar:** YENİ `scripts/event-log.mjs` (çekirdek), YENİ `scripts/compiler.mjs` (dry-run), YENİ `mcp-server/` (MCP server paketi), mevcut `search.mjs`/`append.mjs`/`lint.mjs` event-log'u kullanacak şekilde uyarlanır, `protocols/architecture.md` güncellenir.
-**Proof:** Event-log'dan üretilen Markdown'ın insan tarafından okunabilir kaldığı (mevcut format korunuyor) gösterilir. Transaction'ın atomikliği (yarım kalan bir transaction'ın hiçbir etkisi olmadığı) test edilir. MCP server'ın gerçek bir MCP client'la (ör. basit bir test script'i) konuşabildiği doğrulanır. Stable ID'lerin rename sonrası kırılmadığı test edilir.
+- README'deki `kók-*` → `kök-*`, var olmayan dosya referansları (protocols/mimari.md, examples/project-tracking, examples/technical-reference) kaldırılıyor (Rock 3'ün doc-check'i bunu garanti ediyor).
+- TÜM entegrasyonlar (Hermes VE NatureCo — ikisi de tüm root'ları başlangıçta yüklüyor, sadece Hermes değil) root-0 + pending/personality başlangıç yüklemesi + gerektiğinde on-demand domain yüklemesi'ne hizalanıyor.
+- OpenClaw: TEK belgelenen bootstrap eşlemesi (Root-1+Root-3 mi sadece Root-1 mi — biri seçiliyor, diğeri gerektiğinde explicit yükleniyor).
+**Dosyalar:** `README.md`, `integrations/**`, `protocols/**`
+**Proof:** doc-check.mjs (Rock 3) tüm referansları doğruluyor; entegrasyon dosyalarının kendi içinde tutarlı olduğu okuma ile teyit ediliyor.
+
+## Rock 5 — Retrieval kalitesi + gerçek benchmark + telemetri (revize)
+
+**Done looks like:**
+- `search.mjs`: varsayılan LİTERAL arama (regex DEĞİL) — ReDoS riski varsayılan olarak ortadan kalkıyor. Regex sadece açık, sınırlı (zaman/kaynak limitli), doğrulanmış bir modda (`--regex`) kullanılabiliyor. BM25/trigram skorlama eklenıyor. Türkçe-farkında normalizasyon/ek analizi (generic typo tolerance DEĞİL, gerçek TR morfoloji).
+- `bench.mjs`: ground truth artık stable-ID'lerle kuruluyor (Rock 6), sorgular gerçekçi ortak kelime dağarcığı paylaşıyor (benzersiz anahtar YOK). "Write fidelity" gerçek `append.mjs` çağrılarıyla ölçülüyor. "Hierarchy-only" iddiası dosya-okuma enstrümantasyonuyla (sadece ilgili dosyanın açıldığı assert edilerek) kanıtlanıyor. Concurrency/crash/replay/duplicate-event senaryoları ekleniyor.
+- YENİ `scripts/telemetry.mjs`: varsayılan KAPALI (opt-in), payload'lar hash'lenmiş/minimize, `.gitignore`'da, rotate ediliyor, "hiç secret loglanmadığı" test ediliyor.
+**Dosyalar:** `scripts/search.mjs`, `scripts/bench.mjs`, YENİ `scripts/telemetry.mjs`
+**Proof:** Labeled relevance set + recall@k + precision + latency + bellek tavanı ile kabul kriterleri tanımlanmış karşılaştırmalı benchmark raporu (eski vs yeni metodoloji).
+
+## Rock 6 — Event-log mimarisi: KADEMELİ (revize — ne baştan ne sondan)
+
+**Aşama A (uyumluluk katmanı, erken):**
+- Şema versiyonlama + idempotent Markdown import + stable-ID ataması (format/collision policy tanımlı, replay/rename/re-import test edilmiş) + backup + rollback.
+- Append-only olay günlüğü (`.urdr/events.jsonl`): kanonik serialization, hash-chaining, commit record'ları, kesilme (truncation) kurtarma, fsync davranışı tanımlı ve test edilmiş.
+
+**Aşama B (mevcut araçları taşı):**
+- `lint.mjs`/`search.mjs`/Rock 6'nın compiler'ı event-log'u Rock 0'ın parser'ı üzerinden tüketecek şekilde uyarlanıyor.
+- Çoklu-dosya yayın: TEK bir manifest/pointer-swap ile atomik hale getiriliyor (yarım-üretilmiş bir generation hiçbir okuyucuya görünmüyor, her crash noktasında test ediliyor).
+
+**Aşama C (zengin metadata + politika):**
+- `supersedes`/`derived-from`/`conflicts-with` ilişkileri.
+- Provenance: doğrulanmış şema, boyut sınırı, redaksiyon/render güvenliği kuralları.
+- Forgetting: append-only geçmişle ÇELİŞMEYECEK şekilde — tombstone (geri döndürülebilir "unutuldu" işareti) VE gerçek/geri döndürülemez silme (şifreli payload + key destruction, veya audit'li log compaction) İKİSİ AYRI AYRI tanımlı.
+- Memory-compiler dry-run: plan, girdi ağacının hash'ine BAĞLANIYOR — plan üretildikten sonra ağaç değiştiyse "stale" reddediliyor, onay sonrası tek transaction'da uygulanıyor.
+
+**Aşama D (paketleme, en son):**
+- MCP server: realpath-tabanlı kök sınırlama, symlink reddi, sınırlı input/output boyutu, explicit tool şemaları, adversarial client testleri. Gerçek paket manifesti + lock dosyası + stdio protokol testleri + clean-install testi + paketlenmiş-artifact smoke testi (npm publish YOK).
+
+**Dosyalar:** YENİ `scripts/lib/event-log.mjs`, YENİ `scripts/lib/compiler.mjs`, YENİ `mcp-server/` paketi, `protocols/architecture.md` güncellenir (Markdown'ın hâlâ insan-okunabilir "materialized view" olduğu, event-log'un asıl kaynak olduğu netleştirilir).
+**Proof:** Her aşama kendi golden/fault-injection testleriyle kapanır. Event-log'dan üretilen Markdown'ın mevcut formatla aynı kaldığı (insan okunabilirliği korunuyor) gösterilir. Stable ID'lerin rename sonrası kırılmadığı, transaction'ın atomikliği (yarım kalan transaction'ın hiçbir etkisi olmadığı) test edilir. MCP server basit bir test client'ıyla konuşabiliyor.
 
 ---
 
@@ -86,9 +92,7 @@ node scripts/selftest.mjs
 node scripts/lint.mjs ./templates
 node scripts/bench.mjs --leaves 300 --ambiguity 0.3
 ```
-Her rock sonrası selftest yeşil kalmalı (regresyon yok).
+Her rock sonrası selftest yeşil kalmalı.
 
 ## Non-goals
-- Gerçek bir vector DB/embedding entegrasyonu YOK (Codex'in "opsiyonel semantic fallback" önerisi net şekilde AÇIKÇA ETİKETLENMİŞ ve varsayılan olarak KAPALI kalmalı — LLM-free felsefe korunuyor).
-- Deploy/npm publish YOK (bu cycle'da sadece kod + test).
-- GitHub'a push YOK (kullanıcı ayrıca onaylayacak).
+Gerçek vector DB/embedding entegrasyonu YOK (semantic fallback opsiyonel, açıkça etiketli, varsayılan KAPALI — LLM-free felsefe korunuyor). Deploy/npm publish YOK. GitHub'a push YOK (kullanıcı ayrıca onaylayacak).
