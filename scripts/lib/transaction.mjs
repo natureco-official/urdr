@@ -20,11 +20,13 @@ import {
   readCommittedState,
 } from './event-log.mjs';
 
+const LEAF_COMPARISON_FIELDS = ['contentHash', 'file', 'branch', 'index', 'kind'];
+
 const BKZ_RE = /\bbkz:\s*((?:root|kök|kok)-?\d+)(?:\s*\/\s*([^\n();]+?))?(?=\s*(?:[();]|$))/giu;
 
 export class DirtyViewError extends Error {
   constructor(files, recoveryCopies) {
-    super(`dirty Markdown view${files.length === 1 ? '' : 's'}: ${files.join(', ')}; run reconciliation before publishing`);
+    super(`dirty Markdown view${files.length === 1 ? '' : 's'}: ${files.join(', ')}; run reconciliation before retrying`);
     this.name = 'DirtyViewError';
     this.code = 'URDR_DIRTY_VIEW';
     this.files = files;
@@ -424,6 +426,20 @@ export function loadRootContents(memoryDir) {
 
 /** Populate one existing transaction from complete proposed root views. */
 export function populateTransactionFromViews(transaction, state, contents, opts = {}) {
+  const dirty = new Map();
+  for (const [file] of contents) {
+    const checkpoint = state.checkpoints.get(file);
+    if (!checkpoint) continue;
+    let current = null;
+    try { current = fs.readFileSync(path.join(transaction.memoryDir, file), 'utf8'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if ((current === null ? null : hashContent(current)) !== checkpoint.contentHash) dirty.set(file, current);
+  }
+  if (dirty.size > 0) {
+    const recoverable = new Map([...dirty].filter(([, content]) => content !== null));
+    throw new DirtyViewError([...dirty.keys()], saveRecoveryCopies(transaction.memoryDir, transaction.id, recoverable));
+  }
+
   const forgotten = new Set(opts.forgottenIds || []);
   const snapshots = new Map();
   const currentLeaves = new Map();
@@ -433,8 +449,10 @@ export function populateTransactionFromViews(transaction, state, contents, opts 
     for (const [id, leaf] of snapshot.leaves) {
       if (currentLeaves.has(id)) throw new Error(`duplicate Urðr leaf id: ${id}`);
       currentLeaves.set(id, leaf);
-      const previous = state.leaves.get(id) || {};
-      transaction.upsertLeaf({ ...previous, ...leaf });
+      const previous = state.leaves.get(id);
+      if (!previous || LEAF_COMPARISON_FIELDS.some((key) => previous[key] !== leaf[key])) {
+        transaction.upsertLeaf({ ...(previous || {}), ...leaf });
+      }
     }
   }
   for (const id of state.leaves.keys()) if (!currentLeaves.has(id)) {
@@ -445,7 +463,8 @@ export function populateTransactionFromViews(transaction, state, contents, opts 
   }
 
   const edges = deriveEdges(contents, false);
-  for (const edge of edges.values()) transaction.upsertEdge(edge);
+  // edgeId() hashes every canonical edge field, so an existing id is already identical content.
+  for (const edge of edges.values()) if (!state.edges.has(edge.id)) transaction.upsertEdge(edge);
   for (const id of state.edges.keys()) if (!edges.has(id)) transaction.deleteEdge(id);
   const publishFiles = opts.publishFiles ? new Set(opts.publishFiles) : new Set(contents.keys());
   for (const [file, content] of contents) if (publishFiles.has(file)) transaction.publishRoot(file, content);
@@ -510,7 +529,7 @@ export function reconcileMarkdown(memoryDir, opts = {}) {
   const deleted = new Map();
   for (const [id, leaf] of currentLeaves) {
     const base = baseLeaves.get(id);
-    if (!base || ['contentHash', 'file', 'branch', 'index', 'kind'].some((key) => base[key] !== leaf[key])) directChanges.set(id, leaf);
+    if (!base || LEAF_COMPARISON_FIELDS.some((key) => base[key] !== leaf[key])) directChanges.set(id, leaf);
   }
   for (const [id, leaf] of baseLeaves) if (!currentLeaves.has(id)) deleted.set(id, leaf.file);
 

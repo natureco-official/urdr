@@ -131,6 +131,21 @@ function overgrownTree() {
   return treeWith(`# Root-2\n\n## Operations\n\n${[...deployment, ...security].join('\n')}\n`);
 }
 
+function multiRootOvergrownTree({ withEdge = false } = {}) {
+  const dir = temp();
+  const deployment = Array.from({ length: 25 }, (_, i) => `- deployment pipeline-${i} release-${i} service-${i}`);
+  const security = Array.from({ length: 25 }, (_, i) => `- security vault-${i} credential-${i} control-${i}`);
+  write(dir, 'root-1-topics.md', `# Root-1\n\n## Notes\n\n- untouched root-b leaf\n${withEdge ? '\n- stable bridge (bkz: Root-3 / Canonical)\n' : ''}`);
+  write(dir, 'root-2-technical.md', `# Root-2\n\n## Operations\n\n${[...deployment, ...security].join('\n')}\n`);
+  if (withEdge) write(dir, 'root-3-decisions.md', '# Root-3\n\n## Canonical\n\n- stable edge target\n');
+  importMarkdown(dir);
+  return dir;
+}
+
+function operationRecordsSince(dir, index, type) {
+  return readEventLog(dir).records.slice(index).filter((record) => record.operation?.type === type);
+}
+
 test('compiler dry-run is inert and apply publishes an approved split in one transaction', () => {
   const dir = overgrownTree();
   const beforeLog = readEventLog(dir).records.length;
@@ -155,6 +170,103 @@ test('compiler dry-run is inert and apply publishes an approved split in one tra
   const newRecords = readEventLog(dir).records.slice(beforeApplyLog);
   assert.ok(newRecords.length > 1);
   assert.equal(new Set(newRecords.map((record) => record.transactionId)).size, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('compiler leaves untouched roots leafChanges sequences unchanged', () => {
+  const dir = multiRootOvergrownTree();
+  const before = readCommittedState(dir);
+  const rootB = [...before.leaves.values()].find((leaf) => leaf.text === '- untouched root-b leaf');
+  const sequence = before.leafChanges.get(rootB.id);
+  applyCompilerPlan(dir, compileDryRun(dir));
+  assert.equal(readCommittedState(dir).leafChanges.get(rootB.id), sequence);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('forgetting leaves untouched roots leafChanges sequences unchanged', () => {
+  const dir = multiRootOvergrownTree();
+  const before = readCommittedState(dir);
+  const rootA = [...before.leaves.values()].find((leaf) => leaf.text.includes('deployment pipeline-0'));
+  const rootB = [...before.leaves.values()].find((leaf) => leaf.text === '- untouched root-b leaf');
+  const sequence = before.leafChanges.get(rootB.id);
+  forgetMemoryLeaf(dir, rootA.id);
+  assert.equal(readCommittedState(dir).leafChanges.get(rootB.id), sequence);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('compiler rejects an unreconciled edit in an otherwise untouched root', () => {
+  const dir = multiRootOvergrownTree();
+  const rootB = [...readCommittedState(dir).leaves.values()].find((leaf) => leaf.text === '- untouched root-b leaf');
+  const rootBFile = path.join(dir, 'root-1-topics.md');
+  write(dir, 'root-1-topics.md', fs.readFileSync(rootBFile, 'utf8').replace('untouched root-b leaf', 'unreconciled root-b edit'));
+  const plan = compileDryRun(dir);
+  const beforeLog = readEventLog(dir).records.length;
+  assert.throws(() => applyCompilerPlan(dir, plan), (error) => {
+    assert.equal(error.code, 'URDR_DIRTY_VIEW');
+    assert.deepEqual(error.files, ['root-1-topics.md']);
+    assert.match(error.message, /reconciliation before retrying/);
+    return true;
+  });
+  assert.equal(readEventLog(dir).records.length, beforeLog);
+  assert.match(fs.readFileSync(rootBFile, 'utf8'), /unreconciled root-b edit/);
+  assert.equal(readCommittedState(dir).leaves.get(rootB.id).text, '- untouched root-b leaf');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a direct edit after an unrelated compiler run reconciles without a false conflict', () => {
+  const dir = multiRootOvergrownTree();
+  applyCompilerPlan(dir, compileDryRun(dir));
+  const rootBFile = path.join(dir, 'root-1-topics.md');
+  write(dir, 'root-1-topics.md', fs.readFileSync(rootBFile, 'utf8').replace('untouched root-b leaf', 'later reviewed root-b edit'));
+  const result = reconcileMarkdown(dir);
+  assert.equal(result.status, 'reconciled');
+  assert.deepEqual(result.conflicts, []);
+  assert.ok([...readCommittedState(dir).leaves.values()].some((leaf) => leaf.text === '- later reviewed root-b edit'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('reconciling one changed leaf emits exactly one leaf upsert', () => {
+  const dir = temp();
+  write(dir, 'root-1-topics.md', '# Root-1\n\n## Notes\n\n- changed leaf\n\n- stable sibling\n');
+  write(dir, 'root-2-technical.md', '# Root-2\n\n## Systems\n\n- stable other-root leaf\n');
+  importMarkdown(dir);
+  const file = path.join(dir, 'root-1-topics.md');
+  write(dir, 'root-1-topics.md', fs.readFileSync(file, 'utf8').replace('- changed leaf', '- changed leaf reviewed'));
+  const beforeLog = readEventLog(dir).records.length;
+  assert.equal(reconcileMarkdown(dir).status, 'reconciled');
+  assert.equal(operationRecordsSince(dir, beforeLog, 'leaf.upsert').length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('compiler split upserts exactly the leaves whose canonical placement changed', () => {
+  const dir = multiRootOvergrownTree();
+  const before = readCommittedState(dir);
+  const beforeLog = readEventLog(dir).records.length;
+  applyCompilerPlan(dir, compileDryRun(dir));
+  const after = readCommittedState(dir);
+  const fields = ['contentHash', 'file', 'branch', 'index', 'kind'];
+  const expected = [...after.leaves.values()].filter((leaf) => {
+    const previous = before.leaves.get(leaf.id);
+    return !previous || fields.some((field) => previous[field] !== leaf[field]);
+  }).length;
+  const upserts = operationRecordsSince(dir, beforeLog, 'leaf.upsert');
+  assert.equal(upserts.length, expected);
+  assert.ok(upserts.length < before.leaves.size);
+  assert.ok(upserts.every((record) => record.operation.leaf.file === 'root-2-technical.md'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('unchanged edges are not re-upserted by compiler or forgetting transactions', () => {
+  const dir = multiRootOvergrownTree({ withEdge: true });
+  assert.equal(readCommittedState(dir).edges.size, 1);
+  let beforeLog = readEventLog(dir).records.length;
+  applyCompilerPlan(dir, compileDryRun(dir));
+  assert.equal(operationRecordsSince(dir, beforeLog, 'edge.upsert').length, 0);
+  const forgotten = [...readCommittedState(dir).leaves.values()].find((leaf) => leaf.file === 'root-2-technical.md');
+  beforeLog = readEventLog(dir).records.length;
+  forgetMemoryLeaf(dir, forgotten.id);
+  assert.equal(operationRecordsSince(dir, beforeLog, 'edge.upsert').length, 0);
+  assert.equal(readCommittedState(dir).edges.size, 1);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
