@@ -257,19 +257,26 @@ node scripts/bench.mjs --leaves 300 --ambiguity 0.3
 ```
 
 ```
+  🌳 Urðr Memory Benchmark
+  ──────────────────────────────────────────────────────────────────
   leaves: 300 · wrong-root: 93 (31.0%) · collision: 94 (31.3%) · seed: 42
 
   Production-writer fidelity       : 100.0% (6/6 via appendLeaf + event log) ✓
   Stable-ID import/oracle fidelity : 100.0% (300/300) ✓
 
-  recall@1, hierarchy-only         : 62.0%
-  recall@1, hierarchy + hybrid     : 89.7%
-  recall@1, unique exact keys      : 100.0% (206/206)
-  recall@1, collision/fuzzy keys   : 67.0% (63/94)
-  rescued by hybrid fallback       : 83 leaves (27.7%)
+  recall@1, one-call hierarchy-aware : 89.7%
+  recall@1, global-only              : 88.7%
+  recall@1, two-call assisted        : 89.7%
+  recall@1, unique exact keys        : 100.0% (206/206, one-call)
+  recall@1, collision/fuzzy keys     : 67.0% (63/94, one-call)
+  rescued by assisted second call    : 0 leaves (0.0%)
 
-  avg retrieval latency            : ~37 ms/query (CPU, no LLM/network call)
-  → Hybrid fallback changed recall from 62.0% to 89.7%; collision recall is reported separately.
+  avg one-call latency               : 28.069 ms/query (CPU, no LLM/network call)
+  avg global-only latency             : 40.209 ms/query (CPU, no LLM/network call)
+  avg two-call assisted latency        : 32.144 ms/query (conditional second call)
+  avg one-call result size             : ~22 tokens
+
+  → One-call recall is the production API/MCP behavior; assisted recall requires a conditional second call.
 ```
 
 Write fidelity is measured through the real `appendLeaf()` production writer, not a raw file write, and retrieval correctness is scored against Rock 6A stable IDs, not text-matching. Identical results on macOS, Windows, and Linux (deterministic seed). Use it to prove the architecture works at volume — and to catch the growth bottleneck *before* production, not months later when users ask "why doesn't it remember?"

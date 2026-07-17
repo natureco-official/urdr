@@ -100,14 +100,19 @@ function readLeaves(files) {
   return leaves;
 }
 
-function exactMatchIndices(query, leaves, caseSensitive, timeoutMs, mode) {
+function exactMatchIndices(query, leaves, caseSensitive, timeoutMs, mode, hierarchyCount = 0) {
   const useRegex = mode === 'regex' || (mode === 'auto' && REGEX_META.test(query));
   if (!useRegex) {
     const needle = fold(query, caseSensitive);
-    return { indices: leaves.flatMap((leaf, index) => fold(leaf.searchText, caseSensitive).includes(needle) ? [index] : []), useRegex };
+    const matching = (leaf) => fold(leaf.searchText, caseSensitive).includes(needle);
+    const hierarchyIndices = hierarchyCount > 0
+      ? leaves.slice(0, hierarchyCount).flatMap((leaf, index) => matching(leaf) ? [index] : [])
+      : [];
+    if (hierarchyIndices.length > 0) return { indices: hierarchyIndices, useRegex };
+    return { indices: leaves.flatMap((leaf, index) => (!hierarchyCount || index >= hierarchyCount) && matching(leaf) ? [index] : []), useRegex };
   }
   const child = spawnSync(process.execPath, [REGEX_WORKER], {
-    input: JSON.stringify({ query, caseSensitive, texts: leaves.map((leaf) => leaf.searchText) }),
+    input: JSON.stringify({ query, caseSensitive, texts: leaves.map((leaf) => leaf.searchText), hierarchyCount }),
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
@@ -119,8 +124,8 @@ function exactMatchIndices(query, leaves, caseSensitive, timeoutMs, mode) {
   catch { return { error: 'regex worker returned invalid output' }; }
 }
 
-function rankLeaves(leaves, query, opts) {
-  const exact = exactMatchIndices(query, leaves, opts.caseSensitive, opts.regexTimeoutMs, opts.mode);
+function rankLeaves(leaves, query, opts, knownExact = null) {
+  const exact = knownExact || exactMatchIndices(query, leaves, opts.caseSensitive, opts.regexTimeoutMs, opts.mode);
   if (exact.timeout || exact.error) return exact;
   const exactSet = new Set(exact.indices);
   const ranked = leaves.map((leaf, index) => ({
@@ -130,6 +135,13 @@ function rankLeaves(leaves, query, opts) {
   })).filter((leaf) => leaf.match === 'exact' || leaf.score >= opts.fuzzyThreshold);
   ranked.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file) || a.line - b.line);
   return { results: ranked.map(({ searchText, ...result }) => result) };
+}
+
+function compareResults(a, b) {
+  const matchDifference = (b.match === 'exact' ? 1 : 0) - (a.match === 'exact' ? 1 : 0);
+  return matchDifference || b.score - a.score
+    || (b.route === 'hierarchy' ? 1 : 0) - (a.route === 'hierarchy' ? 1 : 0)
+    || a.file.localeCompare(b.file) || a.line - b.line;
 }
 
 /** Returns { tool, count, results }; timeout adds { timeout:true, error }. */
@@ -149,30 +161,57 @@ export function searchMemory(memoryDir, query, opts = {}) {
   if (files.length === 0) return { tool: 'none', count: 0, results: [], error: 'no root-*.md files in ' + memoryDir };
 
   const preferred = new Set((opts.hierarchyFiles || []).map((file) => path.basename(file)));
-  const stages = preferred.size > 0
-    ? [
-        { route: 'hierarchy', files: files.filter((file) => preferred.has(path.basename(file))) },
-        { route: 'fallback', files },
-      ]
-    : [{ route: 'fallback', files }];
+  const hierarchyFiles = files.filter((file) => preferred.has(path.basename(file)));
+  const fallbackFiles = preferred.size > 0
+    ? files.filter((file) => !preferred.has(path.basename(file)))
+    : files;
+  const hierarchyLeaves = readLeaves(hierarchyFiles);
+  const fallbackLeaves = readLeaves(fallbackFiles);
+  let knownHierarchyExact = null, knownFallbackExact = null;
 
-  for (const stage of stages) {
-    if (stage.files.length === 0) continue;
-    const ranked = rankLeaves(readLeaves(stage.files), cleanQuery, options);
+  if (preferred.size > 0) {
+    const exact = exactMatchIndices(cleanQuery, [...hierarchyLeaves, ...fallbackLeaves],
+      options.caseSensitive, options.regexTimeoutMs, options.mode, hierarchyLeaves.length);
+    if (exact.timeout) {
+      recordSearchOutcome(memoryDir, opts.telemetry, 'timeout');
+      return { tool: 'regex-subprocess', count: 0, results: [], timeout: true, error: `regex timed out after ${options.regexTimeoutMs} ms` };
+    }
+    if (exact.error) return { tool: 'regex-subprocess', count: 0, results: [], error: exact.error };
+    knownHierarchyExact = { indices: exact.indices.filter((index) => index < hierarchyLeaves.length) };
+    knownFallbackExact = { indices: exact.indices.filter((index) => index >= hierarchyLeaves.length).map((index) => index - hierarchyLeaves.length) };
+  }
+  const rankedResults = [];
+
+  for (const stage of [
+    { route: 'hierarchy', leaves: hierarchyLeaves, exact: knownHierarchyExact },
+    { route: 'fallback', leaves: fallbackLeaves, exact: knownFallbackExact },
+  ]) {
+    if (stage.leaves.length === 0) continue;
+    const ranked = rankLeaves(stage.leaves, cleanQuery, options, stage.exact);
     if (ranked.timeout) {
       recordSearchOutcome(memoryDir, opts.telemetry, 'timeout');
       return { tool: 'regex-subprocess', count: 0, results: [], timeout: true, error: `regex timed out after ${options.regexTimeoutMs} ms` };
     }
     if (ranked.error) return { tool: 'regex-subprocess', count: 0, results: [], error: ranked.error };
-    if (ranked.results.length > 0) {
-      const results = ranked.results.slice(0, options.maxResults).map((result) => ({ ...result, route: stage.route }));
-      recordSearchOutcome(memoryDir, opts.telemetry, stage.route);
-      const usesRegex = options.mode === 'regex' || (options.mode === 'auto' && REGEX_META.test(cleanQuery));
-      return { tool: usesRegex ? 'regex-subprocess+hybrid' : 'node+hybrid', count: results.length, results };
+    rankedResults.push(...ranked.results.map((result) => ({ ...result, route: stage.route })));
+
+    // An exact hierarchy winner is already in the highest match tier. Preserve the
+    // structure-first fast path; fuzzy winners must compete with the rest of the tree.
+    if (stage.route === 'hierarchy' && ranked.results[0]?.match === 'exact') {
+      break;
     }
   }
-  recordSearchOutcome(memoryDir, opts.telemetry, 'miss');
-  return { tool: 'node+hybrid', count: 0, results: [] };
+
+  rankedResults.sort(compareResults);
+  const results = rankedResults.slice(0, options.maxResults);
+  const usesRegex = options.mode === 'regex' || (options.mode === 'auto' && REGEX_META.test(cleanQuery));
+  const tool = usesRegex ? 'regex-subprocess+hybrid' : 'node+hybrid';
+  if (results.length === 0) {
+    recordSearchOutcome(memoryDir, opts.telemetry, 'miss');
+    return { tool, count: 0, results: [] };
+  }
+  recordSearchOutcome(memoryDir, opts.telemetry, results[0].route);
+  return { tool, count: results.length, results };
 }
 
 export function formatResults(res) {

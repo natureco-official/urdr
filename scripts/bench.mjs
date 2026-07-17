@@ -139,27 +139,32 @@ function run() {
       return truth?.file === leaf.assignedRoot && truth?.branch === leaf.branch;
     }).length;
 
-    let hierarchyHits = 0, combinedHits = 0, rescued = 0;
+    let oneCallHits = 0, globalHits = 0, assistedHits = 0, assistedRescued = 0;
     let uniqueTotal = 0, uniqueHits = 0, collisionTotal = 0, collisionHits = 0;
-    let totalMs = 0, totalResultChars = 0;
+    let oneCallMs = 0, globalMs = 0, assistedMs = 0, totalResultChars = 0;
     for (const leaf of leaves) {
       const t0 = performance.now();
-      const structured = searchMemory(dir, leaf.query, {
+      const oneCall = searchMemory(dir, leaf.query, {
         hierarchyFiles: [leaf.impliedRoot], maxResults: 1, forceNode: true,
       });
-      const hierarchyHit = structured.results[0]?.route === 'hierarchy' && structured.results[0]?.id === leaf.id;
-      if (hierarchyHit) hierarchyHits++;
-
-      const full = hierarchyHit ? structured : searchMemory(dir, leaf.query, { maxResults: 1, forceNode: true });
-      const hit = full.results[0]?.id === leaf.id;
-      if (hit) {
-        combinedHits++;
-        if (!hierarchyHit) rescued++;
-        totalResultChars += full.results[0].text.length;
+      const t1 = performance.now();
+      const globalOnly = searchMemory(dir, leaf.query, { maxResults: 1, forceNode: true });
+      const t2 = performance.now();
+      const oneCallHit = oneCall.results[0]?.id === leaf.id;
+      const globalHit = globalOnly.results[0]?.id === leaf.id;
+      const assistedHit = oneCallHit || globalHit;
+      if (oneCallHit) oneCallHits++;
+      if (globalHit) globalHits++;
+      if (assistedHit) {
+        assistedHits++;
+        if (!oneCallHit) assistedRescued++;
       }
-      if (leaf.isCollision) { collisionTotal++; if (hit) collisionHits++; }
-      else { uniqueTotal++; if (hit) uniqueHits++; }
-      totalMs += performance.now() - t0;
+      if (oneCallHit) totalResultChars += oneCall.results[0].text.length;
+      if (leaf.isCollision) { collisionTotal++; if (oneCallHit) collisionHits++; }
+      else { uniqueTotal++; if (oneCallHit) uniqueHits++; }
+      oneCallMs += t1 - t0;
+      globalMs += t2 - t1;
+      assistedMs += (t1 - t0) + (oneCallHit ? 0 : t2 - t1);
     }
 
     const pct = (value, total = nLeaves) => total ? ((value / total) * 100).toFixed(1) : 'n/a';
@@ -174,16 +179,19 @@ function run() {
     console.log(`  Production-writer fidelity       : ${pct(writer.passed, writer.count)}% (${writer.passed}/${writer.count} via appendLeaf + event log) ${writer.passed === writer.count ? '✓' : '✗ DATA LOSS'}`);
     console.log(`  Stable-ID import/oracle fidelity : ${pct(stableIdFidelity)}% (${stableIdFidelity}/${nLeaves}) ${stableIdFidelity === nLeaves ? '✓' : '✗'}`);
     console.log('');
-    console.log(`  recall@1, hierarchy-only         : ${pct(hierarchyHits)}%`);
-    console.log(`  recall@1, hierarchy + hybrid     : ${pct(combinedHits)}%`);
-    console.log(`  recall@1, unique exact keys      : ${pct(uniqueHits, uniqueTotal)}% (${uniqueHits}/${uniqueTotal})`);
-    console.log(`  recall@1, collision/fuzzy keys   : ${pct(collisionHits, collisionTotal)}% (${collisionHits}/${collisionTotal})`);
-    console.log(`  rescued by hybrid fallback       : ${rescued} leaves (${pct(rescued)}%)`);
+    console.log(`  recall@1, one-call hierarchy-aware : ${pct(oneCallHits)}%`);
+    console.log(`  recall@1, global-only              : ${pct(globalHits)}%`);
+    console.log(`  recall@1, two-call assisted        : ${pct(assistedHits)}%`);
+    console.log(`  recall@1, unique exact keys        : ${pct(uniqueHits, uniqueTotal)}% (${uniqueHits}/${uniqueTotal}, one-call)`);
+    console.log(`  recall@1, collision/fuzzy keys     : ${pct(collisionHits, collisionTotal)}% (${collisionHits}/${collisionTotal}, one-call)`);
+    console.log(`  rescued by assisted second call    : ${assistedRescued} leaves (${pct(assistedRescued)}%)`);
     console.log('');
-    console.log(`  avg retrieval latency            : ${(totalMs / nLeaves).toFixed(3)} ms/query (CPU, no LLM/network call)`);
-    console.log(`  avg result size                  : ~${Math.round((totalResultChars / nLeaves) / 4)} tokens`);
+    console.log(`  avg one-call latency               : ${(oneCallMs / nLeaves).toFixed(3)} ms/query (CPU, no LLM/network call)`);
+    console.log(`  avg global-only latency             : ${(globalMs / nLeaves).toFixed(3)} ms/query (CPU, no LLM/network call)`);
+    console.log(`  avg two-call assisted latency        : ${(assistedMs / nLeaves).toFixed(3)} ms/query (conditional second call)`);
+    console.log(`  avg one-call result size             : ~${Math.round((totalResultChars / nLeaves) / 4)} tokens`);
     console.log('');
-    console.log(`  → Hybrid fallback changed recall from ${pct(hierarchyHits)}% to ${pct(combinedHits)}%; collision recall is reported separately.`);
+    console.log('  → One-call recall is the production API/MCP behavior; assisted recall requires a conditional second call.');
     console.log('');
     exitCode = writer.passed === writer.count && stableIdFidelity === nLeaves ? 0 : 1;
     if (keep) console.log(`  (fixtures kept at ${dir} and ${writerDir})`);

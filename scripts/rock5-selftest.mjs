@@ -69,6 +69,19 @@ console.log('\n  🌳 Rock 5 self-test\n  ' + '─'.repeat(50));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// A weak hierarchy fuzzy match must not mask an exact match elsewhere in the tree.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-rock5-masked-exact-'));
+  fs.writeFileSync(path.join(dir, 'root-1-topics.md'), root('Root-1', 'Projects', '- sqlite storag policy draft'));
+  fs.writeFileSync(path.join(dir, 'root-2-technical.md'), root('Root-2', 'Systems', '- canonical sqlite storage policy'));
+  const result = searchMemory(dir, 'sqlite storage policy', {
+    hierarchyFiles: ['root-1-topics.md'], maxResults: 1,
+  });
+  ok(result.results[0]?.file === 'root-2-technical.md' && result.results[0]?.match === 'exact' && result.results[0]?.route === 'fallback',
+    'hybrid: full-tree exact match outranks a weak hierarchy fuzzy match');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Telemetry is trace-free by default and aggregate-only when explicitly enabled.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-rock5-telemetry-'));
@@ -92,6 +105,8 @@ console.log('\n  🌳 Rock 5 self-test\n  ' + '─'.repeat(50));
   });
   ok(bench.status === 0 && /Production-writer fidelity\s+: 100\.0%/.test(bench.stdout), 'benchmark: write fidelity uses the production append/event-log path');
   ok(/Stable-ID import\/oracle fidelity\s+: 100\.0%/.test(bench.stdout), 'benchmark: ground truth is established through stable IDs');
+  ok(/recall@1, one-call/.test(bench.stdout) && /recall@1, global-only/.test(bench.stdout) && /recall@1, two-call assisted/.test(bench.stdout),
+    'benchmark: one-call, global-only, and two-call assisted recall are reported separately');
   ok(/recall@1, unique exact keys/.test(bench.stdout) && /recall@1, collision\/fuzzy keys/.test(bench.stdout), 'benchmark: unique and collision recall are reported separately');
 }
 
