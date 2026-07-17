@@ -98,6 +98,7 @@ my-memory/
 | **OpenClaw** | Use `integrations/openclaw/README.md` to expose the index as `MEMORY.md` and keep domain roots under `memory/` |
 | **NatureCo CLI** | Copy `integrations/natureco/plugin.yaml` into your NatureCo config |
 | **Hermes** | Copy `integrations/hermes/skill.yaml` into your Hermes skills dir |
+| **Codex CLI** | `codex mcp add urdr -- node scripts/mcp-server.mjs --root ./my-memory` |
 | **Other agent?** | Load `root-0-index.md` at session start, then read the routed domain root on demand. See `AGENTS.md` |
 
 **Can't find your agent?** Doesn't matter. Urðr is just Markdown files. Any agent that can read files can use it — tell it to load `root-0-index.md` at session start and you're done.
@@ -175,6 +176,7 @@ urdr/
 | **OpenClaw** | `integrations/openclaw/README.md` | ✅ Ready |
 | **NatureCo CLI** | `integrations/natureco/plugin.yaml` | ✅ Ready |
 | **Hermes** | `integrations/hermes/skill.yaml` | ✅ Ready |
+| **Codex CLI** | `scripts/mcp-server.mjs` (MCP, no skill-file convention needed) | ✅ Ready |
 | **Your agent?** | Just read the 4 `root-*.md` files → see `AGENTS.md` | 🛠 Any |
 
 ---
