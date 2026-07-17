@@ -1,0 +1,25 @@
+{
+  "name": "urdr-mcp-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol server for Urdr memory tooling",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "urdr-mcp": "scripts/mcp-server.mjs"
+  },
+  "files": [
+    "scripts/mcp-server.mjs",
+    "scripts/append.mjs",
+    "scripts/search.mjs",
+    "scripts/lint.mjs",
+    "scripts/compiler.mjs",
+    "scripts/lib/*.mjs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0"
+  }
+}

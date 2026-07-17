@@ -157,6 +157,7 @@ urdr/
 │   ├── bench.mjs           # Retrieval/fidelity benchmark (Node, LLM-free)
 │   ├── append.mjs          # Concurrency-safe leaf writer (lock + atomic)
 │   ├── lint.mjs            # Memory health audit (growth/refs/dup, CI guard)
+│   ├── mcp-server.mjs      # MCP tools over a confined memory-tree root
 │   └── selftest.mjs        # Exercises every tool (CI, 3-OS matrix)
 │
 └── examples/               # Practical use cases
@@ -175,6 +176,24 @@ urdr/
 | **NatureCo CLI** | `integrations/natureco/plugin.yaml` | ✅ Ready |
 | **Hermes** | `integrations/hermes/skill.yaml` | ✅ Ready |
 | **Your agent?** | Just read the 4 `root-*.md` files → see `AGENTS.md` | 🛠 Any |
+
+---
+
+## MCP Server
+
+Install the locked official MCP SDK dependency with `npm ci`, then configure the server with one
+fixed filesystem root. Tool-call `memoryDir` values are relative to this root; absolute paths,
+parent traversal, and symlinks that resolve outside it are rejected.
+
+```bash
+node scripts/mcp-server.mjs --root ./my-memory
+```
+
+The server exposes exactly five tool families: `search`, `append`, `lint`, `compiler` (dry-run or
+apply), and `forgetting` (explicit permanent forget or interrupted-scrub resume). Compiler apply
+keeps the committed tree-state staleness check. Forgetting is marked and described as a
+consequential user-triggered erasure action. The package is intentionally not published; use the
+checkout directly or install a locally produced `npm pack` tarball.
 
 ---
 
