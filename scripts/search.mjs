@@ -1,26 +1,15 @@
 #!/usr/bin/env node
 /**
- * search.mjs — Urðr last-resort memory search (LLM-free, cross-platform)
+ * search.mjs — Urðr branch-aware, dependency-free hybrid memory search.
  *
- * The 4-step hierarchical protocol (identify → root → branch → leaf) is the PRIMARY
- * retrieval path. But if the agent guesses the wrong root/branch — or the info is
- * genuinely cross-cutting — hierarchy alone can report "not found" while the data is
- * right there. This is the safety net: a branch-aware, dependency-free full scan of
- * every `root-*.md` (and Turkish `kök-*.md`) so information is never *unreachable*,
- * only ever slower to reach.
+ * Structure remains primary: callers may pass `hierarchyFiles` (root basenames) and
+ * those files are searched first. The safety net then scans every root and combines
+ * literal/regex matching with token + trigram ranking. Regex-bearing queries run in a
+ * terminable subprocess; `regexTimeoutMs` (default 300 ms) is a hard deadline.
  *
- * Pure Node — works on macOS, Windows, and Linux with no `grep`/`rg`/`awk` dependency
- * (a real portability trap: shell `grep -ril` simply does not exist on stock Windows).
- * ripgrep is used ONLY as an optional pre-filter when a tree is very large; results are
- * always re-parsed in Node so every hit carries its `## branch` context.
- *
- * Usage:
- *   node search.mjs <query> [memoryDir] [--case] [--json] [--max N] [--node]
- *   node search.mjs "sqlite" ./my-memory
- *
- * As a module:
- *   import { searchMemory } from './search.mjs';
- *   const { results } = searchMemory('./my-memory', 'sqlite');
+ * Telemetry is disabled by default. `telemetry: true` (CLI: `--telemetry`) stores only
+ * aggregate hierarchy/fallback/miss/timeout counters under `.urdr/`; it never stores a
+ * query-derived value. There is intentionally no query-specific telemetry mode.
  */
 
 import fs from 'node:fs';
@@ -28,121 +17,187 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listRootFiles, parseMarkdown } from './lib/markdown-model.mjs';
+import { recordSearchOutcome } from './lib/telemetry.mjs';
 
 export { listRootFiles } from './lib/markdown-model.mjs';
 
-/** Is ripgrep available? (optional accelerator only) */
-function hasRipgrep() {
-  try {
-    const r = spawnSync('rg', ['--version'], { stdio: 'ignore' });
-    return r.status === 0;
-  } catch { return false; }
+const REGEX_META = /[.*+?^${}()|[\]\\]/;
+const REGEX_WORKER = fileURLToPath(new URL('./lib/regex-match-worker.mjs', import.meta.url));
+const TURKISH_SUFFIXES = ['larınız', 'leriniz', 'larımız', 'lerimiz', 'ları', 'leri', 'lar', 'ler'];
+
+function fold(value, caseSensitive = false) {
+  const text = String(value).normalize('NFKC').replace(/[’`]/g, "'");
+  return caseSensitive ? text : text.toLocaleLowerCase('tr-TR');
 }
 
-/** Build a case-(in)sensitive matcher; falls back to literal if regex is invalid. */
-function buildMatcher(query, caseSensitive) {
-  const flags = caseSensitive ? '' : 'i';
-  try { return new RegExp(query, flags); }
-  catch { return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags); }
-}
-
-/**
- * Parse a single root file, tracking the current `## branch`, and collect matching
- * NON-empty, non-heading lines as leaves. Each hit carries file, branch, line, text.
- */
-function scanFile(file, matcher, out, maxResults) {
-  let content;
-  try { content = fs.readFileSync(file, 'utf8'); }
-  catch { return; }
-  const model = parseMarkdown(content);
-  for (const leaf of model.leaves) {
-    matcher.lastIndex = 0;
-    if (matcher.test(leaf.text)) {
-      const text = leaf.text.replace(/\s*\n\s*/g, ' ').slice(0, 300);
-      out.push({ file: path.basename(file), branch: leaf.branch || '(root)', line: leaf.startLine, text });
-      if (out.length >= maxResults) return;
+function stemToken(raw, caseSensitive = false) {
+  let token = fold(raw, caseSensitive);
+  const apostrophe = token.indexOf("'");
+  if (apostrophe > 0) token = token.slice(0, apostrophe);
+  for (const suffix of TURKISH_SUFFIXES) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= 4) {
+      token = token.slice(0, -suffix.length);
+      break;
     }
   }
+  return token;
 }
 
-/**
- * Search a memory tree. Returns { tool, count, results:[{file,branch,line,text}] }.
- * Results are ordered by file then line — deterministic and branch-aware.
- */
+function tokens(value, caseSensitive = false) {
+  return [...fold(value, caseSensitive).matchAll(/[\p{L}\p{N}]+(?:'[\p{L}]+)?/gu)]
+    .map((match) => stemToken(match[0], caseSensitive))
+    .filter((token) => token.length > 1);
+}
+
+function trigrams(value) {
+  const padded = `  ${value} `;
+  const out = new Set();
+  for (let i = 0; i <= padded.length - 3; i++) out.add(padded.slice(i, i + 3));
+  return out;
+}
+
+function trigramSimilarity(a, b) {
+  if (a === b) return 1;
+  const left = trigrams(a), right = trigrams(b);
+  let overlap = 0;
+  for (const gram of left) if (right.has(gram)) overlap++;
+  return (2 * overlap) / (left.size + right.size || 1);
+}
+
+function fuzzyScore(query, text, caseSensitive) {
+  const queryTokens = tokens(query, caseSensitive);
+  const textTokens = tokens(text, caseSensitive);
+  if (queryTokens.length === 0 || textTokens.length === 0) return 0;
+  let total = 0;
+  for (const queryToken of queryTokens) {
+    let best = 0;
+    for (const textToken of textTokens) best = Math.max(best, trigramSimilarity(queryToken, textToken));
+    // Do not let several generic exact tokens hide one unrelated content token
+    // (for example `comment-only-key` must not match `code-only-key`).
+    if (best < 0.4) return 0;
+    total += best;
+  }
+  return total / queryTokens.length;
+}
+
+function readLeaves(files) {
+  const leaves = [];
+  for (const file of files) {
+    let content;
+    try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    for (const leaf of parseMarkdown(content).leaves) {
+      leaves.push({
+        id: leaf.id || null,
+        file: path.basename(file),
+        branch: leaf.branch || '(root)',
+        line: leaf.startLine,
+        text: leaf.text.replace(/\s*\n\s*/g, ' ').slice(0, 300),
+        searchText: leaf.text,
+      });
+    }
+  }
+  return leaves;
+}
+
+function exactMatchIndices(query, leaves, caseSensitive, timeoutMs) {
+  if (!REGEX_META.test(query)) {
+    const needle = fold(query, caseSensitive);
+    return { indices: leaves.flatMap((leaf, index) => fold(leaf.searchText, caseSensitive).includes(needle) ? [index] : []) };
+  }
+  const child = spawnSync(process.execPath, [REGEX_WORKER], {
+    input: JSON.stringify({ query, caseSensitive, texts: leaves.map((leaf) => leaf.searchText) }),
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (child.error?.code === 'ETIMEDOUT' || child.signal) return { timeout: true };
+  if (child.status !== 0) return { error: child.stderr?.trim() || 'regex worker failed' };
+  try { return { indices: JSON.parse(child.stdout).matches }; }
+  catch { return { error: 'regex worker returned invalid output' }; }
+}
+
+function rankLeaves(leaves, query, opts) {
+  const exact = exactMatchIndices(query, leaves, opts.caseSensitive, opts.regexTimeoutMs);
+  if (exact.timeout || exact.error) return exact;
+  const exactSet = new Set(exact.indices);
+  const ranked = leaves.map((leaf, index) => ({
+    ...leaf,
+    match: exactSet.has(index) ? 'exact' : 'fuzzy',
+    score: exactSet.has(index) ? 1 : fuzzyScore(query, leaf.searchText, opts.caseSensitive),
+  })).filter((leaf) => leaf.match === 'exact' || leaf.score >= opts.fuzzyThreshold);
+  ranked.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file) || a.line - b.line);
+  return { results: ranked.map(({ searchText, ...result }) => result) };
+}
+
+/** Returns { tool, count, results }; timeout adds { timeout:true, error }. */
 export function searchMemory(memoryDir, query, opts = {}) {
-  const { caseSensitive = false, maxResults = 25, forceNode = false } = opts;
-  if (!query || !String(query).trim()) return { tool: 'none', count: 0, results: [], error: 'empty query' };
-  let files = listRootFiles(memoryDir);
+  const options = {
+    caseSensitive: opts.caseSensitive === true,
+    maxResults: Number.isFinite(opts.maxResults) ? Math.max(0, opts.maxResults) : 25,
+    regexTimeoutMs: Number.isFinite(opts.regexTimeoutMs) ? Math.max(10, opts.regexTimeoutMs) : 300,
+    fuzzyThreshold: Number.isFinite(opts.fuzzyThreshold) ? opts.fuzzyThreshold : 0.42,
+  };
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return { tool: 'none', count: 0, results: [], error: 'empty query' };
+  const files = listRootFiles(memoryDir);
   if (files.length === 0) return { tool: 'none', count: 0, results: [], error: 'no root-*.md files in ' + memoryDir };
 
-  // Optional accelerator: on very large trees, use ripgrep to pre-filter which files
-  // even contain the term, then parse only those in Node (still branch-aware).
-  let tool = 'node';
-  if (!forceNode && files.length > 40 && hasRipgrep()) {
-    try {
-      const args = ['-l', caseSensitive ? '-s' : '-i', '--', query, ...files];
-      const rg = spawnSync('rg', args, { encoding: 'utf8' });
-      if (rg.status === 0 && rg.stdout.trim()) {
-        files = rg.stdout.trim().split(/\r?\n/).filter(Boolean);
-        tool = 'ripgrep+node';
-      } else if (rg.status === 1) {
-        files = []; // rg exit 1 = no matches at all
-        tool = 'ripgrep+node';
-      }
-    } catch { /* fall through to pure-node */ }
-  }
+  const preferred = new Set((opts.hierarchyFiles || []).map((file) => path.basename(file)));
+  const stages = preferred.size > 0
+    ? [
+        { route: 'hierarchy', files: files.filter((file) => preferred.has(path.basename(file))) },
+        { route: 'fallback', files },
+      ]
+    : [{ route: 'fallback', files }];
 
-  const matcher = buildMatcher(query, caseSensitive);
-  const results = [];
-  for (const f of files) {
-    scanFile(f, matcher, results, maxResults);
-    if (results.length >= maxResults) break;
+  for (const stage of stages) {
+    if (stage.files.length === 0) continue;
+    const ranked = rankLeaves(readLeaves(stage.files), cleanQuery, options);
+    if (ranked.timeout) {
+      recordSearchOutcome(memoryDir, opts.telemetry, 'timeout');
+      return { tool: 'regex-subprocess', count: 0, results: [], timeout: true, error: `regex timed out after ${options.regexTimeoutMs} ms` };
+    }
+    if (ranked.error) return { tool: 'regex-subprocess', count: 0, results: [], error: ranked.error };
+    if (ranked.results.length > 0) {
+      const results = ranked.results.slice(0, options.maxResults).map((result) => ({ ...result, route: stage.route }));
+      recordSearchOutcome(memoryDir, opts.telemetry, stage.route);
+      return { tool: REGEX_META.test(cleanQuery) ? 'regex-subprocess+hybrid' : 'node+hybrid', count: results.length, results };
+    }
   }
-  return { tool, count: results.length, results };
+  recordSearchOutcome(memoryDir, opts.telemetry, 'miss');
+  return { tool: 'node+hybrid', count: 0, results: [] };
 }
 
-/** Human-readable one-liner per hit: `file › ## branch › leaf`. */
 export function formatResults(res) {
   if (res.error) return `⚠️  ${res.error}`;
   if (res.count === 0) return 'No matches — the information may not have been saved yet.';
-  return res.results
-    .map((r) => `${r.file} › ## ${r.branch} › ${r.text}`)
-    .join('\n');
+  return res.results.map((r) => `${r.file} › ## ${r.branch} › ${r.text}`).join('\n');
 }
 
-// ── CLI ────────────────────────────────────────────────────────────
-// fileURLToPath is the ONLY portable way to compare here: new URL().pathname yields
-// "/C:/..." on Windows and never matches process.argv1's "C:\...". (Exactly the kind
-// of cross-platform trap this project exists to help agents avoid.)
 function isMain() {
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1] || '.');
-  } catch { return false; }
+  try { return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1] || '.'); }
+  catch { return false; }
 }
 
 if (isMain()) {
   const argv = process.argv.slice(2);
-  const flags = new Set(argv.filter((a) => a.startsWith('--')));
-  const positional = argv.filter((a) => !a.startsWith('--'));
+  const flags = new Set(argv.filter((arg) => arg.startsWith('--')));
+  const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+  const optionsWithValues = new Set([valueAfter('--max'), valueAfter('--regex-timeout')].filter(Boolean));
+  const positional = argv.filter((arg) => !arg.startsWith('--') && !optionsWithValues.has(arg));
   const query = positional[0];
   const memoryDir = positional[1] || process.cwd();
-  const maxIdx = argv.indexOf('--max');
-  const maxResults = maxIdx >= 0 ? parseInt(argv[maxIdx + 1], 10) || 25 : 25;
-
   if (!query) {
-    console.error('Usage: node search.mjs <query> [memoryDir] [--case] [--json] [--max N] [--node]');
+    console.error('Usage: node search.mjs <query> [memoryDir] [--case] [--json] [--max N] [--regex-timeout MS] [--telemetry]');
     process.exit(2);
   }
   const res = searchMemory(memoryDir, query, {
     caseSensitive: flags.has('--case'),
-    forceNode: flags.has('--node'),
-    maxResults,
+    maxResults: parseInt(valueAfter('--max'), 10) || 25,
+    regexTimeoutMs: parseInt(valueAfter('--regex-timeout'), 10) || 300,
+    telemetry: flags.has('--telemetry'),
   });
-  if (flags.has('--json')) {
-    console.log(JSON.stringify(res, null, 2));
-  } else {
-    console.log(formatResults(res));
-  }
-  // exit 0 if found, 1 if not (grep convention) — lets agents branch on it
+  console.log(flags.has('--json') ? JSON.stringify(res, null, 2) : formatResults(res));
   process.exit(res.count > 0 ? 0 : 1);
 }
