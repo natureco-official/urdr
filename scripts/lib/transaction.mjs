@@ -333,12 +333,18 @@ export class Transaction {
       const dirty = new Map();
       for (const [file] of this.views) {
         const target = path.join(this.memoryDir, file);
-        const current = fs.readFileSync(target, 'utf8');
+        let current = null;
+        try { current = fs.readFileSync(target, 'utf8'); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
         const checkpoint = state.checkpoints.get(file);
-        if (checkpoint && hashContent(current) !== checkpoint.contentHash
-          && this.expectedDirtyHashes.get(file) !== hashContent(current)) dirty.set(file, current);
+        const currentHash = current === null ? null : hashContent(current);
+        if (checkpoint && currentHash !== checkpoint.contentHash
+          && this.expectedDirtyHashes.get(file) !== currentHash) dirty.set(file, current);
       }
-      if (dirty.size > 0) throw new DirtyViewError([...dirty.keys()], saveRecoveryCopies(this.memoryDir, this.id, dirty));
+      if (dirty.size > 0) {
+        const recoverable = new Map([...dirty].filter(([, content]) => content !== null));
+        throw new DirtyViewError([...dirty.keys()], saveRecoveryCopies(this.memoryDir, this.id, recoverable));
+      }
 
       const operations = [...this.operations];
       for (const [file, content] of this.views) operations.push(checkpointOperation(file, content));

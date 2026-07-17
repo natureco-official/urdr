@@ -355,6 +355,52 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
 
 // ── reconciliation and dirty-view gate ───────────────────────
 {
+  const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-selftest-new-root-'));
+  const newRootFile = path.join(newRoot, 'root-4-new.md');
+  const newLeaf = {
+    id: 'new-root-leaf',
+    file: 'root-4-new.md',
+    branch: 'Fresh',
+    kind: 'list-item',
+    index: 0,
+    text: '- first leaf',
+    contentHash: hashContent('- first leaf'),
+  };
+  const newRootContent = '# Root-4: New\n\n## Fresh\n\n<!-- urdr:id:new-root-leaf -->\n- first leaf\n';
+  let newRootError = null;
+  try {
+    beginTransaction(newRoot).upsertLeaf(newLeaf).publishRoot('root-4-new.md', newRootContent).commit();
+  } catch (error) { newRootError = error; }
+  ok(newRootError === null
+    && fs.existsSync(newRootFile)
+    && fs.readFileSync(newRootFile, 'utf8') === newRootContent
+    && readCommittedState(newRoot).leaves.get(newLeaf.id)?.text === newLeaf.text,
+  'dirty-view gate: transaction can publish a brand-new root file');
+  fs.rmSync(newRoot, { recursive: true, force: true });
+
+  const deletedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-selftest-deleted-root-'));
+  const deletedFile = path.join(deletedRoot, 'root-2-technical.md');
+  const differentFile = path.join(deletedRoot, 'root-3-decisions.md');
+  fs.writeFileSync(deletedFile, '# Root-2\n\n## APIs\n\n- original\n');
+  fs.writeFileSync(differentFile, '# Root-3\n\n## Rules\n\n- original rule\n');
+  importMarkdown(deletedRoot);
+  const deletedLeafId = parseMarkdown(fs.readFileSync(deletedFile, 'utf8')).leaves[0].id;
+  const differentContent = fs.readFileSync(differentFile, 'utf8');
+  const differentNext = differentContent.replace('- original rule', '- changed rule');
+  const differentLeaf = readCommittedState(deletedRoot).leaves.get(parseMarkdown(differentContent).leaves[0].id);
+  fs.rmSync(deletedFile);
+  beginTransaction(deletedRoot)
+    .upsertLeaf({ ...differentLeaf, text: '- changed rule', contentHash: hashContent('- changed rule') })
+    .publishRoot('root-3-decisions.md', differentNext)
+    .commit();
+  const deletedResult = reconcileMarkdown(deletedRoot);
+  ok(deletedResult.status === 'reconciled'
+    && deletedResult.changedLeaves === 1
+    && !fs.existsSync(deletedFile)
+    && !readCommittedState(deletedRoot).leaves.has(deletedLeafId),
+  'reconciliation: out-of-band root deletion survives an unrelated publication and is committed');
+  fs.rmSync(deletedRoot, { recursive: true, force: true });
+
   const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-selftest-reconcile-clean-'));
   fs.writeFileSync(path.join(clean, 'root-2-technical.md'), '# Root-2\n\n## APIs\n\n- original\n');
   importMarkdown(clean);
