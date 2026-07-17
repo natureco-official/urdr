@@ -113,6 +113,10 @@ content = content.replaceAll('[Agent Name]', agent).replaceAll('[User Name]', us
 fs.writeFileSync(file, content, 'utf8');
 NODE
 
+# Birth the staged tree with an authoritative event log. Any failure remains
+# confined to STAGE_DIR and the EXIT trap removes it before the target is touched.
+node "$SCRIPT_DIR/lib/transaction.mjs" import "$STAGE_DIR" >/dev/null
+
 git -C "$STAGE_DIR" init -q
 git -C "$STAGE_DIR" add -A
 git -C "$STAGE_DIR" -c user.name=Urdr -c user.email=urdr@localhost commit -m "initial: Urðr memory tree initialized" -q

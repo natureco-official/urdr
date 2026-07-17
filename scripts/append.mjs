@@ -21,6 +21,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findBranch, hasHeadingNodes, parseMarkdown } from './lib/markdown-model.mjs';
 import { acquireLeaseLock, assertLeaseOwned, releaseLeaseLock } from './lib/lock.mjs';
+import { eventLogPaths, hashContent, readCommittedState } from './lib/event-log.mjs';
+import { assignStableIds, beginTransaction, importMarkdown } from './lib/transaction.mjs';
 
 export const FILE_METADATA_GUARANTEES = Object.freeze({
   linux: 'POSIX permission bits are copied; ownership, ACLs, xattrs, and security labels are not preserved.',
@@ -140,18 +142,50 @@ export function insertLeaf(content, branchName, leafText) {
   return lines.join(model.newline);
 }
 
-/** Concurrency-safe append of one leaf. Returns { file, branch, bytes }. */
+/** Concurrency-safe append of one leaf. Returns { file, branch, bytes, id, transactionId }. */
 export function appendLeaf(memoryDir, rootFile, branch, leafText, opts = {}) {
   if (!leafText || !String(leafText).trim()) throw new Error('empty leaf text');
   if (hasHeadingNodes(leafText)) throw new Error('leaf text contains a Markdown heading');
-  const { target } = resolveConfinedTarget(memoryDir, rootFile);
-  const lock = acquireLeaseLock(`${target}.lock`, opts);
+  const { memory, target } = resolveConfinedTarget(memoryDir, rootFile);
+  const paths = eventLogPaths(memory);
+  fs.mkdirSync(paths.urdrDir, { recursive: true });
+  const lock = acquireLeaseLock(paths.lockDir, opts.lockOptions || opts);
   try {
     assertLeaseOwned(lock);
+
+    // A legacy tree must become authoritative before its first append. Reusing the
+    // tree lock keeps concurrent first writers from racing through bootstrap.
+    if (readCommittedState(memory).checkpoints.size === 0) importMarkdown(memory, { lock });
+
     const content = fs.readFileSync(target, 'utf8');
-    const next = insertLeaf(content, branch, leafText);
-    atomicReplaceFile(target, next, lock, opts);
-    return { file: rootFile, branch, bytes: Buffer.byteLength(next) };
+    const existingIds = new Set(parseMarkdown(content).leaves.map((leaf) => leaf.id).filter(Boolean));
+    const next = assignStableIds(insertLeaf(content, branch, leafText));
+    const model = parseMarkdown(next);
+    const appended = model.leaves
+      .map((leaf, index) => ({ leaf, index }))
+      .filter(({ leaf }) => leaf.id && !existingIds.has(leaf.id));
+    if (appended.length !== 1) throw new Error(`append must create exactly one stable leaf; created ${appended.length}`);
+
+    const { leaf, index } = appended[0];
+    const result = beginTransaction(memory, { lock })
+      .upsertLeaf({
+        id: leaf.id,
+        file: rootFile,
+        branch: leaf.branch,
+        kind: leaf.kind,
+        index,
+        text: leaf.text,
+        contentHash: hashContent(leaf.text),
+      })
+      .publishRoot(rootFile, next)
+      .commit(opts);
+    return {
+      file: rootFile,
+      branch,
+      bytes: Buffer.byteLength(next),
+      id: leaf.id,
+      transactionId: result.transactionId,
+    };
   } finally {
     releaseLeaseLock(lock);
   }

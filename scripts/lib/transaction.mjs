@@ -53,7 +53,7 @@ function insertMetadata(content, additions) {
   return lines.join(model.newline);
 }
 
-function assignStableIds(content) {
+export function assignStableIds(content) {
   const model = parseMarkdown(content);
   const seen = new Set();
   const additions = new Map();
@@ -290,6 +290,10 @@ export class Transaction {
   constructor(memoryDir, opts = {}) {
     this.memoryDir = path.resolve(memoryDir);
     this.id = opts.id || crypto.randomUUID();
+    this.lock = opts.lock || null;
+    if (this.lock && path.resolve(this.lock.lockDir) !== path.resolve(eventLogPaths(this.memoryDir).lockDir)) {
+      throw new Error('transaction lock does not belong to this memory tree');
+    }
     this.operations = [];
     this.views = new Map();
     this.expectedDirtyHashes = new Map(opts.expectedDirtyHashes || []);
@@ -324,7 +328,8 @@ export class Transaction {
     if (this.closed) throw new Error('transaction is closed');
     const paths = eventLogPaths(this.memoryDir);
     fs.mkdirSync(paths.urdrDir, { recursive: true });
-    const lock = acquireLeaseLock(paths.lockDir, opts.lockOptions);
+    const lock = this.lock || acquireLeaseLock(paths.lockDir, opts.lockOptions);
+    const ownsLock = !this.lock;
     try {
       assertLeaseOwned(lock);
       const state = readCommittedState(this.memoryDir);
@@ -373,7 +378,7 @@ export class Transaction {
       if (staged) repairPublishedViews(this.memoryDir, lock, opts);
       return { transactionId: this.id, generationId: staged?.generationId || null, ...result };
     } finally {
-      releaseLeaseLock(lock);
+      if (ownsLock) releaseLeaseLock(lock);
     }
   }
 
@@ -394,9 +399,9 @@ function loadRootContents(memoryDir) {
   return new Map(listRootFiles(memoryDir).map((file) => [path.basename(file), fs.readFileSync(file, 'utf8')]));
 }
 
-export function importMarkdown(memoryDir) {
+export function importMarkdown(memoryDir, opts = {}) {
   const memory = path.resolve(memoryDir);
-  repairPublishedViews(memory);
+  repairPublishedViews(memory, opts.lock, opts);
   const current = loadRootContents(memory);
   const state = readCommittedState(memory);
   const isUnchanged = current.size > 0 && [...current].every(([file, content]) => {
@@ -404,12 +409,12 @@ export function importMarkdown(memoryDir) {
     return checkpoint?.contentHash === hashContent(content) && parseMarkdown(content).leaves.every((leaf) => leaf.id);
   });
   if (isUnchanged) return { status: 'unchanged', transactionId: null, importedLeaves: 0, edges: state.edges.size };
-  if (state.checkpoints.size > 0) return reconcileMarkdown(memory);
+  if (state.checkpoints.size > 0) return reconcileMarkdown(memory, opts);
 
   const prepared = new Map([...current].map(([file, content]) => [file, assignStableIds(content)]));
   deriveEdges(prepared, true);
   const edges = deriveEdges(prepared, false);
-  const transaction = beginTransaction(memory);
+  const transaction = beginTransaction(memory, { lock: opts.lock });
   let importedLeaves = 0;
   const seenIds = new Set();
   for (const [file, content] of prepared) {
@@ -427,9 +432,9 @@ export function importMarkdown(memoryDir) {
   return { status: 'imported', transactionId: result.transactionId, importedLeaves, edges: edges.size };
 }
 
-export function reconcileMarkdown(memoryDir) {
+export function reconcileMarkdown(memoryDir, opts = {}) {
   const memory = path.resolve(memoryDir);
-  repairPublishedViews(memory);
+  repairPublishedViews(memory, opts.lock, opts);
   const state = readCommittedState(memory);
   const raw = loadRootContents(memory);
   const prepared = new Map([...raw].map(([file, content]) => [file, assignStableIds(content)]));
@@ -470,7 +475,10 @@ export function reconcileMarkdown(memoryDir) {
   const dirtyFiles = [...raw].filter(([file, content]) => state.checkpoints.get(file)?.contentHash !== hashContent(content));
   if (directChanges.size === 0 && deleted.size === 0 && dirtyFiles.length === 0) return { status: 'clean', conflicts: [] };
 
-  const transaction = beginTransaction(memory, { expectedDirtyHashes: [...raw].map(([file, content]) => [file, hashContent(content)]) });
+  const transaction = beginTransaction(memory, {
+    expectedDirtyHashes: [...raw].map(([file, content]) => [file, hashContent(content)]),
+    lock: opts.lock,
+  });
   for (const leaf of directChanges.values()) transaction.upsertLeaf(leaf);
   for (const id of deleted.keys()) transaction.deleteLeaf(id);
   for (const edge of edges.values()) transaction.upsertEdge(edge);

@@ -14,7 +14,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { searchMemory } from './search.mjs';
-import { appendLeaf, insertLeaf, resolveConfinedTarget } from './append.mjs';
+import { appendLeaf, atomicReplaceFile, insertLeaf, resolveConfinedTarget } from './append.mjs';
 import { lintTree } from './lint.mjs';
 import { parseMarkdown } from './lib/markdown-model.mjs';
 import { acquireLeaseLock, assertLeaseOwned, releaseLeaseLock } from './lib/lock.mjs';
@@ -109,9 +109,12 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
 // ── append.mjs ──────────────────────────────────────────────────────
 {
   const dir = tmpTree();
-  appendLeaf(dir, 'root-2-technical.md', 'APIs', '**01.01.2026 — sqlite — chose SQLite**');
+  const appended = appendLeaf(dir, 'root-2-technical.md', 'APIs', '**01.01.2026 — sqlite — chose SQLite**');
   let c = fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8');
   ok(c.includes('SQLite'), 'append: leaf written');
+  const committedLeaf = readCommittedState(dir).leaves.get(appended.id);
+  ok(Boolean(appended.id && appended.transactionId && committedLeaf?.text.includes('SQLite')),
+    'append: stable leaf ID is immediately visible in committed state');
   ok(!/## APIs[\s\S]*?_No entries yet\._/.test(c.split('## Fixes')[0]), 'append: placeholder replaced in APIs');
   appendLeaf(dir, 'root-2-technical.md', 'APIs', '**02.02.2026 — redis — chose Redis**');
   c = fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8');
@@ -127,12 +130,16 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
 {
   const dir = tmpTree();
   const appendScript = fileURLToPath(new URL('./append.mjs', import.meta.url));
+  // One authoritative hash chain requires tree-wide serialization. This test asserts
+  // correctness/no-loss only; appenders are not expected to execute in parallel.
   const writers = Array.from({ length: 6 }, (_, index) => runChild(process.execPath, [appendScript, dir,
     'root-2-technical.md', 'APIs', `**01.01.2026 — concurrent-${index} — retained**`]));
   const statuses = await Promise.all(writers);
   const content = fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8');
   ok(statuses.every((status) => status === 0) && writers.every((_, index) => content.includes(`concurrent-${index}`)),
     'append: concurrent processes retain every leaf');
+  ok(readCommittedState(dir).leaves.size === 6,
+    'append CLI: fresh legacy tree bootstraps all concurrent leaves into committed state');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -177,9 +184,12 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
   for (const stage of ['before-fsync', 'before-rename', 'after-rename', 'before-directory-fsync']) {
     const dir = tmpTree();
     const target = path.join(dir, 'root-2-technical.md');
+    const next = insertLeaf(fs.readFileSync(target, 'utf8'), 'APIs', `**01.01.2026 — ${stage} — test**`);
+    const lock = acquireLeaseLock(`${target}.lock`);
     let injected = false;
-    try { appendLeaf(dir, 'root-2-technical.md', 'APIs', `**01.01.2026 — ${stage} — test**`, { faultAt: stage }); }
+    try { atomicReplaceFile(target, next, lock, { faultAt: stage }); }
     catch (error) { injected = error.message === `fault injection: ${stage}`; }
+    finally { releaseLeaseLock(lock); }
     const content = fs.readFileSync(target, 'utf8');
     const changed = content.includes(stage);
     ok(injected, `atomic write: ${stage} fault hook fires`);

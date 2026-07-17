@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readEventLog } from './lib/event-log.mjs';
 import { ROOT_FILE_RE, parseMarkdown } from './lib/markdown-model.mjs';
+import { importMarkdown, reconcileMarkdown } from './lib/transaction.mjs';
 import { createRoot, main, moveEntries, splitBranch } from './migrate.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -110,6 +111,10 @@ test('init safely substitutes special characters and refuses overwrite', () => {
   const user = 'U&ser / \\ $1';
   const result = init(['--path', target, '--lang', 'en', '--agent-name', agent, '--user-name', user], dir);
   assert.equal(result.status, 0, result.stderr);
+  const logFile = path.join(target, '.urdr', 'events.jsonl');
+  assert(fs.statSync(logFile).size > 0);
+  assert.equal(importMarkdown(target).status, 'unchanged');
+  assert.equal(reconcileMarkdown(target).status, 'clean');
   const personality = fs.readFileSync(path.join(target, 'agent-personality.md'), 'utf8');
   assert(personality.includes(agent));
   assert(personality.includes(user));
