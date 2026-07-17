@@ -10,7 +10,7 @@
 
 A memory system is not "information storage." It is **"fast information retrieval."** The value of an AI agent's memory is not how much it remembers — it's how quickly and accurately it can find the right information when needed.
 
-Flat files / single-document lists degrade into **junk drawers** over time. A tree structure provides **logarithmic search**: every query resolves in 2-3 steps by choosing root → branch → leaf.
+Flat files / single-document lists degrade into **junk drawers** over time. A tree structure provides bounded hierarchical routing that usually reduces how much memory must be read: choose root → branch → leaf, then use the full-tree hybrid fallback scan when that routing guess is wrong.
 
 **Why this document exists:** A consistent memory architecture ensures cross-session continuity, persistent personalization, and fast recall. Without architecture, an agent becomes "a being that starts from zero every session, forgetting context."
 
@@ -62,7 +62,7 @@ Flat files / single-document lists degrade into **junk drawers** over time. A tr
 - **Root-2 (technical):** Technical/system/operational information. Installs, services, processes, APIs.
 - **Root-3 (decisions):** Decisions, constraints, relational notes, patterns, lessons learned.
 
-**Root growth rule:** When a root accumulates **9+ branches**, create a new root file. This keeps branches per file in the **5-9 range** — aligned with Miller's Law (the number of items humans can hold in working memory).
+**Root growth rule:** When a root accumulates **9+ branches**, create a new root file. Keeping branches per file in the **5-9 range** is a practical routing heuristic inspired by working-memory research such as Miller's Law, not a strict scientific limit.
 
 **Practical root limit:** 4-6 roots. More than 6 makes cross-root coordination difficult — "which root do I check?" becomes a real question.
 
@@ -227,8 +227,9 @@ keys they do not understand. The canonical serialization and hash-chain algorith
 
 The memory compiler defaults to dry-run. It emits deterministic branch-split evidence, index
 diffs, and unambiguous stable-ID reference repairs. Each plan is bound to the committed event-log
-head; `--apply` rejects the plan if any transaction committed after it was generated. Applicable
-actions are published through one normal transaction only after the plan is explicitly applied.
+head; `--apply` rejects the plan if any transaction committed after it was generated or if any
+submitted action is not reproduced by a fresh trusted dry run. Applicable actions are published
+through one normal transaction only after the plan is explicitly applied.
 
 ---
 

@@ -31,7 +31,7 @@ Urðr solves this with a **tree-memory** approach — inspired by how humans org
 | **Consistency** | Often duplicated/copied across files | Single primary source + stable-ID-backed `bkz:` edges, not free-text |
 | **Growth** | Unmanaged — becomes a junk drawer | Disciplined branch-splitting rules, plus a deterministic auto-split proposal when a branch outgrows them |
 | **Cross-domain** | Handled ad-hoc | Formal cross-cutting protocol |
-| **Auditability & deletion** | Usually neither, or a bare irreversible delete | Optional provenance metadata per leaf; forgetting is a permanent tombstone that scrubs every derived artifact, with the historical ledger boundary explicitly documented |
+| **Auditability & deletion** | Usually neither, or a bare irreversible delete | Optional provenance metadata per leaf; forgetting removes a leaf from current and future state and every live managed artifact, with the historical ledger boundary explicitly documented |
 | **Maintenance** | Manual cleanup, or none | A memory compiler proposes concrete fixes (splits, index diffs, reference repairs) as a dry-run plan, applied only after explicit approval |
 | **Agent integration** | Platform-specific only | OpenCode, Claude Code, Codex CLI (MCP), NatureCo, Hermes, OpenClaw |
 
@@ -49,7 +49,7 @@ Urðr solves this with a **tree-memory** approach — inspired by how humans org
 │   └── root-3  →  Decisions (ADR, constraints, learned lessons)
 │
 ├── 🌿 BRANCHES (## headings inside roots)
-│   └── Each root has 5-9 branches (Miller's Law limit)
+│   └── Each root usually has 5-9 branches (a practical routing heuristic)
 │
 └── 🍃 LEAVES (specific notes, dated events, facts)
     └── Branches hold 30-50 leaves before splitting
@@ -198,10 +198,12 @@ parent traversal, and symlinks that resolve outside it are rejected.
 node scripts/mcp-server.mjs --root ./my-memory
 ```
 
-The server exposes exactly five tool families: `search`, `append`, `lint`, `compiler` (dry-run or
-apply), and `forgetting` (explicit permanent forget or interrupted-scrub resume). Compiler apply
-keeps the committed tree-state staleness check. Forgetting is marked and described as a
-consequential user-triggered erasure action. The package is intentionally not published; use the
+The server exposes seven namespaced tools: `urdr_search`, `urdr_append`, `urdr_lint`,
+`urdr_compile_plan`, `urdr_apply_plan`, `urdr_forget_leaf`, and `urdr_resume_forgetting`.
+Compiler planning is read-only; apply keeps the committed tree-state staleness check and accepts
+only actions reproduced by a fresh trusted dry run. Forgetting is marked and described as a
+consequential user-triggered erasure action, while resume is an idempotent completion of an already
+committed forget. The package is intentionally not published; use the
 checkout directly or install a locally produced `npm pack` tarball.
 
 ---
@@ -231,6 +233,10 @@ Urðr ships a **hybrid last-resort search** that closes this gap without touchin
 # When the 4-step protocol comes up empty, scan everything (branch-aware):
 node scripts/search.mjs "sqltie karar" ./my-memory
 # → root-2-technical.md › ## APIs › **04.07.2026 — chose SQLite for local storage**
+
+# Override metacharacter auto-detection when the query syntax must be explicit:
+node scripts/search.mjs "foo.bar" ./my-memory --literal
+node scripts/search.mjs "foo.*bar" ./my-memory --regex
 ```
 
 - **LLM-free, no embeddings, no network call** — exact/regex matching, then trigram-similarity fuzzy ranking over lightly stemmed tokens (with Turkish agglutinative-suffix stripping) catches typos and different inflections a literal scan would miss entirely.
@@ -240,7 +246,7 @@ node scripts/search.mjs "sqltie karar" ./my-memory
 - **Telemetry is opt-in and aggregate-only** — disabled by default and a true no-op on disk when off; when enabled it records only hierarchy/fallback/miss/timeout counters, never a query, result, or leaf ID.
 - **Composable** — exits `0` on hit / `1` on miss (grep convention), or `--json` for programmatic use.
 
-This makes retrieval a *guarantee*, not a *guess*: hierarchy first, hybrid full-tree ranking as the net beneath it.
+This substantially reduces false "not remembered" results: hierarchy first, hybrid full-tree ranking as the net beneath it.
 
 ## Benchmark (`scripts/bench.mjs`)
 
@@ -275,8 +281,8 @@ Markdown files are the human-readable surface; the actual source of truth is an 
 - **Crash-safe.** Every write is fsync'd and atomically renamed; a process killed mid-publish self-heals on the next read instead of corrupting state or losing a leaf.
 - **Concurrency-safe.** A separate lease-keeper subprocess renews the lock on its own timer, so a busy writer can't lose the lock to a false "stale" steal.
 - **Provenance (optional).** Any leaf may carry `creator`, `timestamp`, `source`, `confidence`, `verification_state`, `verifier`, and `validity_interval` metadata — fully additive, no migration needed for existing leaves.
-- **Forgetting.** `scripts/forget.mjs` writes a permanent tombstone and scrubs the leaf's bytes from every generation snapshot, recovery copy, and registered export — self-verifying that nothing survives. The one thing it cannot do is redact the historical ledger in place (that would break the hash chain); this boundary is documented in `protocols/architecture.md`, not hidden.
-- **Memory compiler (`scripts/compiler.mjs`).** Turns lint findings into a concrete dry-run plan — deterministic branch-split proposals (keyword/Jaccard clustering, no ML), index diffs, and unambiguous reference repairs — bound to the current event-log head hash, so an approved plan is rejected as stale if anything else committed first. Applying is always one atomic transaction.
+- **Forgetting.** `scripts/forget.mjs` tombstones a leaf, removes it from current and future state, and scrubs its bytes from every live managed generation snapshot, recovery copy, and registered export. It cannot redact the historical ledger in place without breaking the hash chain; this boundary is documented in `protocols/architecture.md`, not hidden.
+- **Memory compiler (`scripts/compiler.mjs`).** Turns lint findings into a concrete dry-run plan — deterministic branch-split proposals (keyword/Jaccard clustering, no ML), index diffs, and unambiguous reference repairs — bound to the current event-log head hash. Apply rejects a stale plan and any action not reproduced by a fresh trusted dry run, then publishes the approved actions as one atomic transaction.
 
 ```bash
 node scripts/compiler.mjs ./my-memory --out plan.json   # dry-run, changes nothing

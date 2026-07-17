@@ -4,7 +4,8 @@
  *
  * Structure remains primary: callers may pass `hierarchyFiles` (root basenames) and
  * those files are searched first. The safety net then scans every root and combines
- * literal/regex matching with token + trigram ranking. Regex-bearing queries run in a
+ * literal/regex matching with token + trigram ranking. `mode` may force literal or regex
+ * interpretation; unset/auto preserves metacharacter detection. Regex queries run in a
  * terminable subprocess; `regexTimeoutMs` (default 300 ms) is a hard deadline.
  *
  * Telemetry is disabled by default. `telemetry: true` (CLI: `--telemetry`) stores only
@@ -99,10 +100,11 @@ function readLeaves(files) {
   return leaves;
 }
 
-function exactMatchIndices(query, leaves, caseSensitive, timeoutMs) {
-  if (!REGEX_META.test(query)) {
+function exactMatchIndices(query, leaves, caseSensitive, timeoutMs, mode) {
+  const useRegex = mode === 'regex' || (mode === 'auto' && REGEX_META.test(query));
+  if (!useRegex) {
     const needle = fold(query, caseSensitive);
-    return { indices: leaves.flatMap((leaf, index) => fold(leaf.searchText, caseSensitive).includes(needle) ? [index] : []) };
+    return { indices: leaves.flatMap((leaf, index) => fold(leaf.searchText, caseSensitive).includes(needle) ? [index] : []), useRegex };
   }
   const child = spawnSync(process.execPath, [REGEX_WORKER], {
     input: JSON.stringify({ query, caseSensitive, texts: leaves.map((leaf) => leaf.searchText) }),
@@ -111,14 +113,14 @@ function exactMatchIndices(query, leaves, caseSensitive, timeoutMs) {
     windowsHide: true,
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (child.error?.code === 'ETIMEDOUT' || child.signal) return { timeout: true };
-  if (child.status !== 0) return { error: child.stderr?.trim() || 'regex worker failed' };
-  try { return { indices: JSON.parse(child.stdout).matches }; }
+  if (child.error?.code === 'ETIMEDOUT' || child.signal) return { timeout: true, useRegex };
+  if (child.status !== 0) return { error: child.stderr?.trim() || 'regex worker failed', useRegex };
+  try { return { indices: JSON.parse(child.stdout).matches, useRegex }; }
   catch { return { error: 'regex worker returned invalid output' }; }
 }
 
 function rankLeaves(leaves, query, opts) {
-  const exact = exactMatchIndices(query, leaves, opts.caseSensitive, opts.regexTimeoutMs);
+  const exact = exactMatchIndices(query, leaves, opts.caseSensitive, opts.regexTimeoutMs, opts.mode);
   if (exact.timeout || exact.error) return exact;
   const exactSet = new Set(exact.indices);
   const ranked = leaves.map((leaf, index) => ({
@@ -132,7 +134,10 @@ function rankLeaves(leaves, query, opts) {
 
 /** Returns { tool, count, results }; timeout adds { timeout:true, error }. */
 export function searchMemory(memoryDir, query, opts = {}) {
+  const mode = opts.mode ?? 'auto';
+  if (!['auto', 'literal', 'regex'].includes(mode)) throw new Error('search mode must be "auto", "literal", or "regex"');
   const options = {
+    mode,
     caseSensitive: opts.caseSensitive === true,
     maxResults: Number.isFinite(opts.maxResults) ? Math.max(0, opts.maxResults) : 25,
     regexTimeoutMs: Number.isFinite(opts.regexTimeoutMs) ? Math.max(10, opts.regexTimeoutMs) : 300,
@@ -162,7 +167,8 @@ export function searchMemory(memoryDir, query, opts = {}) {
     if (ranked.results.length > 0) {
       const results = ranked.results.slice(0, options.maxResults).map((result) => ({ ...result, route: stage.route }));
       recordSearchOutcome(memoryDir, opts.telemetry, stage.route);
-      return { tool: REGEX_META.test(cleanQuery) ? 'regex-subprocess+hybrid' : 'node+hybrid', count: results.length, results };
+      const usesRegex = options.mode === 'regex' || (options.mode === 'auto' && REGEX_META.test(cleanQuery));
+      return { tool: usesRegex ? 'regex-subprocess+hybrid' : 'node+hybrid', count: results.length, results };
     }
   }
   recordSearchOutcome(memoryDir, opts.telemetry, 'miss');
@@ -183,16 +189,21 @@ function isMain() {
 if (isMain()) {
   const argv = process.argv.slice(2);
   const flags = new Set(argv.filter((arg) => arg.startsWith('--')));
+  if (flags.has('--literal') && flags.has('--regex')) {
+    console.error('--literal and --regex are mutually exclusive');
+    process.exit(2);
+  }
   const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
   const optionsWithValues = new Set([valueAfter('--max'), valueAfter('--regex-timeout')].filter(Boolean));
   const positional = argv.filter((arg) => !arg.startsWith('--') && !optionsWithValues.has(arg));
   const query = positional[0];
   const memoryDir = positional[1] || process.cwd();
   if (!query) {
-    console.error('Usage: node search.mjs <query> [memoryDir] [--case] [--json] [--max N] [--regex-timeout MS] [--telemetry]');
+    console.error('Usage: node search.mjs <query> [memoryDir] [--literal|--regex] [--case] [--json] [--max N] [--regex-timeout MS] [--telemetry]');
     process.exit(2);
   }
   const res = searchMemory(memoryDir, query, {
+    mode: flags.has('--literal') ? 'literal' : flags.has('--regex') ? 'regex' : 'auto',
     caseSensitive: flags.has('--case'),
     maxResults: parseInt(valueAfter('--max'), 10) || 25,
     regexTimeoutMs: parseInt(valueAfter('--regex-timeout'), 10) || 300,

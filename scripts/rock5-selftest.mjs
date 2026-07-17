@@ -33,6 +33,25 @@ console.log('\n  🌳 Rock 5 self-test\n  ' + '─'.repeat(50));
   ok(elapsed < 2000, `regex: hard deadline prevents a hang (${Math.round(elapsed)} ms)`);
   fs.writeFileSync(path.join(dir, 'root-2-technical.md'), root('Root-2', 'Safety', '- literal [ bracket'));
   ok(searchMemory(dir, '[', { regexTimeoutMs: 300 }).count === 1, 'regex: invalid patterns preserve literal fallback behavior');
+  ok(searchMemory(dir, '[', { mode: 'regex', regexTimeoutMs: 300 }).count === 1, 'regex: explicit mode preserves invalid-pattern literal fallback behavior');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Explicit literal mode must not reinterpret punctuation as regular-expression syntax.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-rock5-search-mode-'));
+  fs.writeFileSync(path.join(dir, 'root-2-technical.md'), root('Root-2', 'Syntax', '- literal foo.bar\n- decoy fooXbar'));
+  const literal = searchMemory(dir, 'foo.bar', { mode: 'literal' });
+  ok(literal.count === 1 && literal.results[0].text.includes('foo.bar'), 'search mode: literal punctuation matches only literal text');
+  const cli = spawnSync(process.execPath, [fileURLToPath(new URL('./search.mjs', import.meta.url)), 'foo.bar', dir, '--literal', '--json'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  const cliResult = JSON.parse(cli.stdout);
+  ok(cli.status === 0 && cliResult.count === 1 && cliResult.results[0].text.includes('foo.bar'), 'search mode: --literal CLI flag reaches literal matching');
+  const conflicting = spawnSync(process.execPath, [fileURLToPath(new URL('./search.mjs', import.meta.url)), 'foo.bar', dir, '--literal', '--regex'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  ok(conflicting.status === 2 && /mutually exclusive/.test(conflicting.stderr), 'search mode: --literal and --regex CLI flags are mutually exclusive');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

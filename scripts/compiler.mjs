@@ -137,13 +137,24 @@ export function applyCompilerPlan(memoryDir, plan) {
   const memory = path.resolve(memoryDir);
   if (plan?.planVersion !== COMPILER_PLAN_VERSION) throw new Error(`unsupported compiler plan version: ${plan?.planVersion}`);
   if (path.resolve(plan.memoryDir) !== memory) throw new Error('compiler plan belongs to a different memory tree');
+  if (!Array.isArray(plan.actions)) throw new Error('compiler plan actions must be an array');
   const paths = eventLogPaths(memory);
   const lock = acquireLeaseLock(paths.lockDir);
   try {
     const state = readCommittedState(memory);
     const actualHash = committedTreeHash(state);
     if (actualHash !== plan.treeStateHash) throw new Error(`stale compiler plan: expected tree state ${plan.treeStateHash}, current state is ${actualHash}`);
-    const selected = plan.actions.filter((action) => action.applicable);
+    const freshPlan = buildPlanUnlocked(memory);
+    const freshActions = new Map(freshPlan.actions.map((action) => [action.id, action]));
+    const submittedIds = new Set();
+    for (const action of plan.actions) {
+      if (!action || typeof action !== 'object' || typeof action.id !== 'string'
+        || action.id !== actionId(action) || !freshActions.has(action.id) || submittedIds.has(action.id)) {
+        throw new Error(`compiler plan action was not produced by the current trusted dry run: ${action?.id || '(missing id)'}`);
+      }
+      submittedIds.add(action.id);
+    }
+    const selected = plan.actions.map((action) => freshActions.get(action.id)).filter((action) => action.applicable);
     if (!selected.length) throw new Error('compiler plan has no applicable approved actions');
     const contents = loadRootContents(memory);
     const changed = new Set();

@@ -56,7 +56,7 @@ async function openInMemory(serveRoot) {
   return { server, client };
 }
 
-await test('real MCP client calls search, append, lint, compiler, and consequential forgetting actions', async () => {
+await test('real MCP client calls namespaced search, append, lint, compiler, and forgetting tools', async () => {
   const serveRoot = temp();
   const memory = path.join(serveRoot, 'memory');
   write(path.join(memory, 'root-2-technical.md'), compilerFixture());
@@ -64,17 +64,27 @@ await test('real MCP client calls search, append, lint, compiler, and consequent
   const { server, client } = await openInMemory(serveRoot);
   try {
     const listed = await client.listTools();
-    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), ['append', 'compiler', 'forgetting', 'lint', 'search']);
-    assert.match(listed.tools.find((tool) => tool.name === 'forgetting').description, /CONSEQUENTIAL USER-TRIGGERED ERASURE/);
+    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
+      'urdr_append', 'urdr_apply_plan', 'urdr_compile_plan', 'urdr_forget_leaf',
+      'urdr_lint', 'urdr_resume_forgetting', 'urdr_search',
+    ]);
+    assert.match(listed.tools.find((tool) => tool.name === 'urdr_forget_leaf').description, /CONSEQUENTIAL USER-TRIGGERED ERASURE/);
+    assert.equal(listed.tools.find((tool) => tool.name === 'urdr_compile_plan').annotations.readOnlyHint, true);
+    assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_apply_plan').annotations,
+      { readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+    assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_search').inputSchema.properties.mode,
+      { type: 'string', enum: ['auto', 'literal', 'regex'], default: 'auto' });
+    assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_resume_forgetting').annotations,
+      { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
 
     const leafText = '**17.07.2026 — MCP boundary — unique-rock6d-memory**';
-    const appended = value(await client.callTool({ name: 'append', arguments: {
+    const appended = value(await client.callTool({ name: 'urdr_append', arguments: {
       memoryDir: 'memory', rootFile: 'root-2-technical.md', branch: 'Notes', leafText,
     } }));
     assert.match(appended.id, /^u_/);
     assert.ok(fs.readFileSync(path.join(memory, appended.file), 'utf8').includes(leafText));
 
-    const searched = value(await client.callTool({ name: 'search', arguments: {
+    const searched = value(await client.callTool({ name: 'urdr_search', arguments: {
       memoryDir: 'memory', query: 'unique-rock6d-memory', hierarchyFiles: ['root-2-technical.md'],
     } }));
     assert.equal(searched.count, 1);
@@ -82,36 +92,53 @@ await test('real MCP client calls search, append, lint, compiler, and consequent
     assert.match(searched.results[0].text, /unique-rock6d-memory/);
     assert.equal(fs.existsSync(path.join(memory, '.urdr', 'search-telemetry.json')), false);
 
-    const linted = value(await client.callTool({ name: 'lint', arguments: { memoryDir: 'memory', failOnWarn: true } }));
+    value(await client.callTool({ name: 'urdr_append', arguments: {
+      memoryDir: 'memory', rootFile: 'root-2-technical.md', branch: 'Notes', leafText: '- literal foo.bar',
+    } }));
+    value(await client.callTool({ name: 'urdr_append', arguments: {
+      memoryDir: 'memory', rootFile: 'root-2-technical.md', branch: 'Notes', leafText: '- decoy fooXbar',
+    } }));
+    const literal = value(await client.callTool({ name: 'urdr_search', arguments: {
+      memoryDir: 'memory', query: 'foo.bar', mode: 'literal',
+    } }));
+    assert.equal(literal.count, 1);
+    assert.match(literal.results[0].text, /foo\.bar/);
+
+    const linted = value(await client.callTool({ name: 'urdr_lint', arguments: { memoryDir: 'memory', failOnWarn: true } }));
     assert.equal(linted.files, 1);
     assert.ok(linted.findings.some((finding) => finding.code === 'branch-leaves'));
     assert.equal(linted.failed, true);
 
-    const plan = value(await client.callTool({ name: 'compiler', arguments: { memoryDir: 'memory', action: 'dry-run' } }));
+    const plan = value(await client.callTool({ name: 'urdr_compile_plan', arguments: { memoryDir: 'memory' } }));
     assert.ok(plan.actions.some((action) => action.type === 'branch.split' && action.applicable));
-    value(await client.callTool({ name: 'append', arguments: {
+    value(await client.callTool({ name: 'urdr_append', arguments: {
       memoryDir: 'memory', rootFile: 'root-2-technical.md', branch: 'Notes',
       leafText: '**17.07.2026 — stale proof — changes committed tree hash**',
     } }));
-    assert.match(errorMessage(await client.callTool({ name: 'compiler', arguments: {
-      memoryDir: 'memory', action: 'apply', plan,
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_apply_plan', arguments: {
+      memoryDir: 'memory', plan,
     } })), /stale compiler plan/);
 
-    const freshPlan = value(await client.callTool({ name: 'compiler', arguments: { memoryDir: 'memory', action: 'dry-run' } }));
-    const applied = value(await client.callTool({ name: 'compiler', arguments: {
-      memoryDir: 'memory', action: 'apply', plan: freshPlan,
+    const freshPlan = value(await client.callTool({ name: 'urdr_compile_plan', arguments: { memoryDir: 'memory' } }));
+    const tamperedPlan = JSON.parse(JSON.stringify(freshPlan));
+    tamperedPlan.actions.find((action) => action.type === 'branch.split' && action.applicable).clusters[0].name = 'Operations / Fabricated';
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_apply_plan', arguments: {
+      memoryDir: 'memory', plan: tamperedPlan,
+    } })), /not produced by the current trusted dry run/);
+    const applied = value(await client.callTool({ name: 'urdr_apply_plan', arguments: {
+      memoryDir: 'memory', plan: freshPlan,
     } }));
     assert.equal(applied.status, 'applied');
     assert.ok(applied.actionsApplied.length > 0);
     assert.match(fs.readFileSync(path.join(memory, 'root-2-technical.md'), 'utf8'), /## Operations \/ Deployment/);
 
-    const forgotten = value(await client.callTool({ name: 'forgetting', arguments: {
-      memoryDir: 'memory', action: 'forget', leafId: appended.id, reason: 'explicit Rock 6D self-test erasure',
+    const forgotten = value(await client.callTool({ name: 'urdr_forget_leaf', arguments: {
+      memoryDir: 'memory', leafId: appended.id, reason: 'explicit Rock 6D self-test erasure',
     } }));
     assert.equal(forgotten.id, appended.id);
     assert.equal(readCommittedState(memory).forgottenLeaves.has(appended.id), true);
     assert.ok(!fs.readFileSync(path.join(memory, 'root-2-technical.md'), 'utf8').includes('unique-rock6d-memory'));
-    const resumed = value(await client.callTool({ name: 'forgetting', arguments: { memoryDir: 'memory', action: 'resume' } }));
+    const resumed = value(await client.callTool({ name: 'urdr_resume_forgetting', arguments: { memoryDir: 'memory' } }));
     assert.deepEqual(resumed, { resumed: [] });
   } finally {
     await client.close();
@@ -129,19 +156,19 @@ await test('MCP boundary rejects traversal, symlink escape, and oversized query/
   fs.symlinkSync(outside, path.join(serveRoot, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
   const { server, client } = await openInMemory(serveRoot);
   try {
-    assert.match(errorMessage(await client.callTool({ name: 'search', arguments: {
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_search', arguments: {
       memoryDir: '../outside', query: 'x',
     } })), /path traversal/);
-    assert.match(errorMessage(await client.callTool({ name: 'append', arguments: {
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_append', arguments: {
       memoryDir: 'memory', rootFile: '../outside.md', branch: 'Notes', leafText: '- x',
     } })), /path traversal/);
-    assert.match(errorMessage(await client.callTool({ name: 'search', arguments: {
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_search', arguments: {
       memoryDir: 'escape', query: 'must stay outside',
     } })), /escapes memory directory/);
-    assert.match(errorMessage(await client.callTool({ name: 'search', arguments: {
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_search', arguments: {
       memoryDir: 'memory', query: 'q'.repeat(MAX_QUERY_LENGTH + 1),
     } })), /exceeds maximum length/);
-    assert.match(errorMessage(await client.callTool({ name: 'append', arguments: {
+    assert.match(errorMessage(await client.callTool({ name: 'urdr_append', arguments: {
       memoryDir: 'memory', rootFile: 'root-2-technical.md', branch: 'Notes',
       leafText: 'x'.repeat(MAX_LEAF_TEXT_LENGTH + 1),
     } })), /exceeds maximum length/);
@@ -183,7 +210,7 @@ await test('packed package clean-installs, starts over stdio, and answers a real
     const client = new Client({ name: 'urdr-clean-install-client', version: '1.0.0' });
     try {
       await client.connect(transport);
-      const searched = value(await client.callTool({ name: 'search', arguments: { query: 'packed-server-proof' } }));
+      const searched = value(await client.callTool({ name: 'urdr_search', arguments: { query: 'packed-server-proof' } }));
       assert.equal(searched.count, 1);
       assert.match(searched.results[0].text, /packed-server-proof/);
       console.log(`    clean-install MCP: search returned ${searched.count} matching leaf`);

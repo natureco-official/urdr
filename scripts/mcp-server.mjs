@@ -20,13 +20,14 @@ const memoryDirSchema = stringSchema('Relative memory-tree directory beneath the
 
 export const TOOL_DEFINITIONS = Object.freeze([
   {
-    name: 'search',
+    name: 'urdr_search',
     description: 'Search a confined Urdr memory tree. Search telemetry is opt-in and remains disabled unless telemetry=true.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['query'],
       properties: {
         memoryDir: memoryDirSchema,
-        query: stringSchema('Literal or regular-expression search query.', MAX_QUERY_LENGTH),
+        query: stringSchema('Search query interpreted according to mode.', MAX_QUERY_LENGTH),
+        mode: { type: 'string', enum: ['auto', 'literal', 'regex'], default: 'auto' },
         caseSensitive: { type: 'boolean' },
         maxResults: { type: 'integer', minimum: 0, maximum: 1000 },
         regexTimeoutMs: { type: 'integer', minimum: 10, maximum: 10000 },
@@ -37,7 +38,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
-    name: 'append',
+    name: 'urdr_append',
     description: 'Append one dated leaf to an existing branch in a confined Urdr root file using the durable event-log transaction writer.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['rootFile', 'branch', 'leafText'],
@@ -51,7 +52,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
-    name: 'lint',
+    name: 'urdr_lint',
     description: 'Audit a confined Urdr tree for growth, reference, index, and duplication findings.',
     inputSchema: {
       type: 'object', additionalProperties: false,
@@ -60,31 +61,47 @@ export const TOOL_DEFINITIONS = Object.freeze([
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
-    name: 'compiler',
-    description: 'Run the Urdr compiler. action=dry-run is inert; action=apply executes an explicitly supplied plan and rejects it if the committed tree-state hash is stale.',
+    name: 'urdr_compile_plan',
+    description: 'Generate an inert Urdr compiler dry-run plan for the current committed tree state.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['action'],
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'urdr_apply_plan',
+    description: 'Apply an explicitly supplied compiler plan after validating its size, confinement, freshness, and exact correspondence to a newly regenerated trusted dry run.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['plan'],
       properties: {
         memoryDir: memoryDirSchema,
-        action: { type: 'string', enum: ['dry-run', 'apply'] },
-        plan: { type: 'object', description: 'Exact dry-run plan to approve and apply. Required for action=apply.' },
+        plan: { type: 'object', description: 'Exact compiler dry-run plan to approve and apply.' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
-    name: 'forgetting',
-    description: 'CONSEQUENTIAL USER-TRIGGERED ERASURE. action=forget permanently tombstones a leaf and scrubs managed artifacts; it is not a benign delete or automatic maintenance action. action=resume completes artifact scrubs after an interrupted committed forgetting operation.',
+    name: 'urdr_forget_leaf',
+    description: 'CONSEQUENTIAL USER-TRIGGERED ERASURE. Forget one stable leaf, remove it from current and future state and every live managed artifact, and retain only the documented append-only ledger record.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['action'],
+      type: 'object', additionalProperties: false, required: ['leafId'],
       properties: {
         memoryDir: memoryDirSchema,
-        action: { type: 'string', enum: ['forget', 'resume'] },
-        leafId: stringSchema('Stable leaf ID to permanently forget. Required for action=forget.', 512),
+        leafId: stringSchema('Stable leaf ID to forget.', 512),
         reason: stringSchema('User-provided reason recorded with the forgetting operation.', 4096),
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'urdr_resume_forgetting',
+    description: 'Idempotently finish managed-artifact scrubs for forgetting operations that were already committed but interrupted.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
 ]);
 
@@ -115,6 +132,14 @@ function optionalInteger(args, key, min, max) {
   return args[key];
 }
 
+function optionalEnum(args, key, values, fallback) {
+  if (args[key] === undefined) return fallback;
+  if (typeof args[key] !== 'string' || !values.includes(args[key])) {
+    throw new Error(`${key} must be one of: ${values.join(', ')}`);
+  }
+  return args[key];
+}
+
 function rejectTraversal(relativePath, label) {
   if (typeof relativePath !== 'string' || relativePath.length === 0) throw new Error(`${label} must be a non-empty relative path`);
   if (relativePath.length > 1024) throw new Error(`${label} exceeds maximum length of 1024 characters`);
@@ -137,7 +162,7 @@ function validateRootFile(memory, rootFile, label = 'rootFile') {
 }
 
 function validateCompilerPlan(memory, plan) {
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new Error('plan is required for compiler action=apply');
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new Error('plan is required for urdr_apply_plan');
   const bytes = Buffer.byteLength(JSON.stringify(plan));
   if (bytes > MAX_COMPILER_PLAN_BYTES) throw new Error(`plan exceeds maximum size of ${MAX_COMPILER_PLAN_BYTES} bytes`);
   if (path.resolve(String(plan.memoryDir || '')) !== memory) throw new Error('compiler plan belongs to a different memory tree');
@@ -163,7 +188,7 @@ function executeTool(serveRoot, name, rawArguments) {
   const args = objectArguments(rawArguments);
   const memory = resolveServedMemoryDir(serveRoot, args.memoryDir ?? '.');
 
-  if (name === 'search') {
+  if (name === 'urdr_search') {
     const query = requiredString(args, 'query', MAX_QUERY_LENGTH);
     const hierarchyFiles = args.hierarchyFiles;
     if (hierarchyFiles !== undefined) {
@@ -171,6 +196,7 @@ function executeTool(serveRoot, name, rawArguments) {
       for (const file of hierarchyFiles) validateRootFile(memory, requiredString({ file }, 'file', 255), 'hierarchy file');
     }
     return searchMemory(memory, query, {
+      mode: optionalEnum(args, 'mode', ['auto', 'literal', 'regex'], 'auto'),
       caseSensitive: optionalBoolean(args, 'caseSensitive'),
       maxResults: optionalInteger(args, 'maxResults', 0, 1000),
       regexTimeoutMs: optionalInteger(args, 'regexTimeoutMs', 10, 10000),
@@ -179,14 +205,14 @@ function executeTool(serveRoot, name, rawArguments) {
     });
   }
 
-  if (name === 'append') {
+  if (name === 'urdr_append') {
     const rootFile = requiredString(args, 'rootFile', 255);
     validateRootFile(memory, rootFile);
     return appendLeaf(memory, rootFile, requiredString(args, 'branch', 512),
       requiredString(args, 'leafText', MAX_LEAF_TEXT_LENGTH));
   }
 
-  if (name === 'lint') {
+  if (name === 'urdr_lint') {
     const failOnWarn = optionalBoolean(args, 'failOnWarn') ?? false;
     const lint = lintTree(memory);
     const errors = lint.findings.filter((finding) => finding.level === 'error').length;
@@ -194,22 +220,20 @@ function executeTool(serveRoot, name, rawArguments) {
     return { ...lint, errors, warnings, failed: errors > 0 || (failOnWarn && warnings > 0) };
   }
 
-  if (name === 'compiler') {
-    const action = requiredString(args, 'action', 16);
-    if (action === 'dry-run') return compileDryRun(memory);
-    if (action !== 'apply') throw new Error('compiler action must be "dry-run" or "apply"');
+  if (name === 'urdr_compile_plan') return compileDryRun(memory);
+
+  if (name === 'urdr_apply_plan') {
     validateCompilerPlan(memory, args.plan);
     return applyCompilerPlan(memory, args.plan);
   }
 
-  if (name === 'forgetting') {
-    const action = requiredString(args, 'action', 16);
-    if (action === 'resume') return resumeForgottenArtifactScrubs(memory);
-    if (action !== 'forget') throw new Error('forgetting action must be "forget" or "resume"');
+  if (name === 'urdr_forget_leaf') {
     const leafId = requiredString(args, 'leafId', 512);
     const reason = args.reason === undefined ? undefined : requiredString(args, 'reason', 4096);
     return forgetMemoryLeaf(memory, leafId, { reason });
   }
+
+  if (name === 'urdr_resume_forgetting') return resumeForgottenArtifactScrubs(memory);
 
   throw new Error(`unknown tool: ${name}`);
 }

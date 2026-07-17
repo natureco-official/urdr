@@ -158,6 +158,16 @@ test('compiler dry-run is inert and apply publishes an approved split in one tra
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('compiler rejects a fresh-hash plan whose action content was hand-tampered', () => {
+  const dir = overgrownTree();
+  const plan = compileDryRun(dir);
+  const split = plan.actions.find((action) => action.type === 'branch.split' && action.applicable);
+  split.clusters[0].name = 'Operations / Fabricated';
+  assert.throws(() => applyCompilerPlan(dir, plan), /not produced by the current trusted dry run/);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8'), /Fabricated/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('compiler emits a concrete non-destructive index diff', () => {
   const leaves = Array.from({ length: 15 }, (_, i) => `- index content ${i}`).join('\n');
   const dir = treeWith(`# Root-0\n\n## Map\n\n${leaves}\n`, 'root-0-index.md');
