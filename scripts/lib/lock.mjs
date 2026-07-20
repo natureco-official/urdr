@@ -6,6 +6,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const LEASE_SERVICE_POLL_MS = 2;
+const LEASE_SERVICE_HEARTBEAT_MS = 25;
+const LEASE_SERVICE_HEARTBEAT_STALE_MS = 500;
 let leaseService;
 
 function sleepSync(ms) {
@@ -153,9 +155,10 @@ function leaseServicePaths(directory, requestId) {
   };
 }
 
-function runLeaseService({ directory, parentPid }) {
+function runLeaseService({ directory, parentPid, serviceToken }) {
   const leases = new Map();
   let stopping = false;
+  const heartbeatFile = path.join(directory, 'heartbeat.json');
 
   const forgetLease = (token, release) => {
     const active = leases.get(token);
@@ -170,6 +173,7 @@ function runLeaseService({ directory, parentPid }) {
     stopping = true;
     clearInterval(requestInterval);
     clearInterval(parentInterval);
+    clearInterval(heartbeatInterval);
     for (const token of [...leases.keys()]) {
       try { forgetLease(token, true); } catch {}
     }
@@ -261,23 +265,43 @@ function runLeaseService({ directory, parentPid }) {
   const parentInterval = setInterval(() => {
     if (!processExists(parentPid)) stop();
   }, 25);
+  const writeHeartbeat = () => {
+    try { writeJsonAtomic(heartbeatFile, { token: serviceToken, updatedAt: Date.now() }); } catch {}
+  };
+  writeHeartbeat();
+  const heartbeatInterval = setInterval(writeHeartbeat, LEASE_SERVICE_HEARTBEAT_MS);
+  // The channel closes when the parent exits even if a raw PID probe still sees a
+  // zombie or a recycled PID. Lease requests and responses remain file based.
+  if (process.connected) process.once('disconnect', stop);
+}
+
+function leaseServiceIsReachable(service) {
+  if (!processExists(service.child.pid)) return false;
+  const heartbeat = readJson(path.join(service.directory, 'heartbeat.json'));
+  if (!heartbeat) return Date.now() - service.startedAt <= LEASE_SERVICE_HEARTBEAT_STALE_MS;
+  return heartbeat.token === service.token
+    && Date.now() - heartbeat.updatedAt <= LEASE_SERVICE_HEARTBEAT_STALE_MS;
 }
 
 function leaseServiceHandle() {
-  if (leaseService && processExists(leaseService.child.pid)) return leaseService;
+  if (leaseService && leaseServiceIsReachable(leaseService)) return leaseService;
   if (leaseService) {
+    process.removeListener('exit', leaseService.cleanup);
+    try { fs.writeFileSync(path.join(leaseService.directory, 'stop'), ''); } catch {}
     try { fs.rmSync(leaseService.directory, { recursive: true, force: true }); } catch {}
   }
 
   const directory = path.join(os.tmpdir(), `urdr-lease-service-${process.pid}-${crypto.randomUUID()}`);
+  const token = crypto.randomUUID();
   fs.mkdirSync(directory);
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--lease-service',
-    directory, String(process.pid)], {
-    stdio: 'ignore',
+    directory, String(process.pid), token], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     windowsHide: true,
   });
   child.on('error', () => {});
   child.unref();
+  child.channel?.unref();
 
   const cleanup = () => {
     try { fs.writeFileSync(path.join(directory, 'stop'), ''); } catch {}
@@ -287,7 +311,7 @@ function leaseServiceHandle() {
     try { fs.rmSync(directory, { recursive: true, force: true }); } catch {}
   };
   process.once('exit', cleanup);
-  leaseService = { child, directory };
+  leaseService = { child, directory, token, startedAt: Date.now(), cleanup };
   return leaseService;
 }
 
@@ -308,7 +332,7 @@ function waitForServiceResponse(service, files, deadline) {
   while (Date.now() <= deadline) {
     const response = readServiceResponse(files);
     if (response) return response;
-    if (!processExists(service.child.pid)) return { state: 'stopped' };
+    if (!leaseServiceIsReachable(service)) return { state: 'stopped' };
     sleepSync(2);
   }
   return null;
@@ -427,6 +451,6 @@ if (isMain() && process.argv[2] === '--lease-keeper') {
 }
 
 if (isMain() && process.argv[2] === '--lease-service') {
-  const [, , , directory, parentPid] = process.argv;
-  runLeaseService({ directory, parentPid: Number(parentPid) });
+  const [, , , directory, parentPid, serviceToken] = process.argv;
+  runLeaseService({ directory, parentPid: Number(parentPid), serviceToken });
 }

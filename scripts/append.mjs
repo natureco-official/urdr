@@ -86,6 +86,25 @@ public static class UrdrMove {
     finally { CloseHandle(handle); }
   }
 
+  static bool IsSharingViolation(IOException error) {
+    int code = error.HResult & 0xffff;
+    return code == 32 || code == 33;
+  }
+
+  static T RetrySharingViolation<T>(Func<T> operation) {
+    for (int attempt = 0; ; attempt++) {
+      try { return operation(); }
+      catch (IOException error) {
+        if (!IsSharingViolation(error) || attempt >= 5) throw;
+        Thread.Sleep(2 << attempt);
+      }
+    }
+  }
+
+  static void RetrySharingViolation(Action operation) {
+    RetrySharingViolation<object>(() => { operation(); return null; });
+  }
+
   static void RunServer(string directory, int parentPid) {
     Directory.CreateDirectory(directory);
     try {
@@ -94,7 +113,7 @@ public static class UrdrMove {
           string response = Path.ChangeExtension(request, ".response");
           string result;
           try {
-            byte[] payload = File.ReadAllBytes(request);
+            byte[] payload = RetrySharingViolation(() => File.ReadAllBytes(request));
             int fromBytes = BitConverter.ToInt32(payload, 0);
             string from = Encoding.Unicode.GetString(payload, 4, fromBytes);
             string to = Encoding.Unicode.GetString(payload, 4 + fromBytes, payload.Length - 4 - fromBytes);
@@ -105,8 +124,8 @@ public static class UrdrMove {
           }
           string temporary = response + ".tmp";
           File.WriteAllText(temporary, result, new UTF8Encoding(false));
-          File.Move(temporary, response);
-          File.Delete(request);
+          RetrySharingViolation(() => File.Move(temporary, response));
+          RetrySharingViolation(() => File.Delete(request));
         }
         Thread.Sleep(1);
       }
