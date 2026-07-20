@@ -41,9 +41,11 @@ function sleepSync(ms) {
 
 function runChild(command, args) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: 'ignore', windowsHide: true });
-    child.on('error', () => resolve(-1));
-    child.on('exit', (code) => resolve(code));
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => resolve({ status: -1, stderr: error.message }));
+    child.on('exit', (status) => resolve({ status, stderr }));
   });
 }
 
@@ -134,9 +136,12 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
   // correctness/no-loss only; appenders are not expected to execute in parallel.
   const writers = Array.from({ length: 6 }, (_, index) => runChild(process.execPath, [appendScript, dir,
     'root-2-technical.md', 'APIs', `**01.01.2026 — concurrent-${index} — retained**`]));
-  const statuses = await Promise.all(writers);
+  const results = await Promise.all(writers);
+  results.forEach((result, index) => {
+    if (result.status !== 0) console.error(`    concurrent-${index} exited ${result.status}: ${result.stderr.trim() || '(no stderr)'}`);
+  });
   const content = fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8');
-  ok(statuses.every((status) => status === 0) && writers.every((_, index) => content.includes(`concurrent-${index}`)),
+  ok(results.every((result) => result.status === 0) && writers.every((_, index) => content.includes(`concurrent-${index}`)),
     'append: concurrent processes retain every leaf');
   ok(readCommittedState(dir).leaves.size === 6,
     'append CLI: fresh legacy tree bootstraps all concurrent leaves into committed state');
@@ -539,11 +544,14 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-selftest-lock-'));
   const lockDir = path.join(dir, 'writer.lock');
-  const first = acquireLeaseLock(lockDir, { timeoutMs: 2000, staleMs: 180, updateMs: 40 });
-  sleepSync(360);
+  // Twenty renewal opportunities still prove that a blocked caller delegates
+  // heartbeats, while one second of scheduler grace avoids treating a busy host
+  // as a broken keeper. With no renewal, the two-second block is still fatal.
+  const first = acquireLeaseLock(lockDir, { timeoutMs: 2000, staleMs: 1000, updateMs: 100 });
+  sleepSync(2000);
   ok(assertLeaseOwned(first), 'lock: subprocess renews while writer event loop is blocked');
   let contended = false;
-  try { acquireLeaseLock(lockDir, { timeoutMs: 120, staleMs: 180, updateMs: 40 }); }
+  try { acquireLeaseLock(lockDir, { timeoutMs: 120, staleMs: 1000, updateMs: 100 }); }
   catch (error) { contended = /lock timeout/.test(error.message); }
   ok(contended, 'lock: active owner cannot be stolen');
   releaseLeaseLock(first);

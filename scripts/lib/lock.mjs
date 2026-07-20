@@ -20,10 +20,28 @@ function readJson(file) {
   catch { return null; }
 }
 
+function isTransientWindowsFilesystemError(error) {
+  return process.platform === 'win32' && ['EACCES', 'EBUSY', 'EPERM'].includes(error?.code);
+}
+
 function writeJsonAtomic(file, value) {
   const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value));
-  fs.renameSync(tmp, file);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, file);
+        return;
+      } catch (error) {
+        // Windows can transiently deny replacement while another process has just
+        // opened the destination. The completed private file is safe to retry.
+        if (!isTransientWindowsFilesystemError(error) || attempt >= 5) throw error;
+        sleepSync(2 << attempt);
+      }
+    }
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+  }
 }
 
 function processExists(pid) {
@@ -69,6 +87,9 @@ function keeperAcquire(lockDir, token, parentPid, staleMs) {
       fs.mkdirSync(guardDir);
       guarded = true;
     } catch (error) {
+      // On Windows, mkdir can report EPERM rather than EEXIST while another
+      // contender is creating/removing this guard. It means "busy", not fatal.
+      if (process.platform === 'win32' && error.code === 'EPERM') return null;
       if (error.code !== 'EEXIST') throw error;
       try {
         if (Date.now() - fs.statSync(guardDir).mtimeMs > staleMs) fs.rmSync(guardDir, { recursive: true, force: true });
@@ -195,9 +216,9 @@ function runLeaseService({ directory, parentPid, serviceToken }) {
       try {
         lease.updatedAt = Date.now();
         writeJsonAtomic(path.join(lockDir, 'lease.json'), lease);
-      } catch {
+      } catch (error) {
         // Only this lease stops renewing; its stale directory remains recoverable.
-        try { writeJsonAtomic(leaseFailureFile(releaseFile), { token }); } catch {}
+        try { writeJsonAtomic(leaseFailureFile(releaseFile), { token, code: error.code, message: error.message }); } catch {}
         forgetLease(token, false);
       }
     }, updateMs);
