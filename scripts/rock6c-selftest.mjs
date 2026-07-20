@@ -4,10 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendLeaf } from './append.mjs';
 import { applyCompilerPlan, compileDryRun } from './compiler.mjs';
 import { EVENT_SCHEMA_VERSION, readCommittedState, readEventLog } from './lib/event-log.mjs';
 import { forgetMemoryLeaf, resumeForgottenArtifactScrubs, scrubForgottenArtifacts } from './lib/forgetting.mjs';
 import { proposeBranchSplit } from './lib/auto-split.mjs';
+import { parseMarkdown } from './lib/markdown-model.mjs';
 import { beginTransaction, exportMarkdown, importMarkdown, reconcileMarkdown } from './lib/transaction.mjs';
 import { recordSearchOutcome } from './lib/telemetry.mjs';
 
@@ -90,6 +92,69 @@ test('forget tombstone scrubs managed artifacts but retains ledger history', () 
   assert.ok(!telemetry.includes(secret));
   assert.deepEqual(JSON.parse(telemetry).queries, { hierarchy: 0, fallback: 1, miss: 0, timeout: 0 });
   fs.rmSync(exported, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('forgetting matches Markdown artifacts by stable ID and preserves a colliding live leaf', () => {
+  const shared = '- identical retained text';
+  const dir = treeWith(`# Root-2\n\n## Notes\n\n${shared}\n\n${shared}\n`);
+  const initial = readCommittedState(dir);
+  const twins = [...initial.leaves.values()].filter((leaf) => leaf.text === shared);
+  assert.equal(twins.length, 2);
+  const [forgotten, retained] = twins;
+  const oldGeneration = JSON.parse(fs.readFileSync(path.join(dir, '.urdr', 'current-generation.json'), 'utf8')).generationId;
+  const recovery = path.join(dir, '.urdr', 'recovery', 'collision');
+  fs.mkdirSync(recovery, { recursive: true });
+  write(recovery, 'root-2-technical.md', fs.readFileSync(path.join(dir, 'root-2-technical.md'), 'utf8'));
+  const exported = temp();
+  exportMarkdown(dir, exported);
+
+  assert.doesNotThrow(() => forgetMemoryLeaf(dir, forgotten.id));
+  const committed = readCommittedState(dir);
+  assert.equal(committed.leaves.has(forgotten.id), false);
+  assert.equal(committed.leaves.get(retained.id).text, shared);
+  for (const file of [
+    path.join(dir, 'root-2-technical.md'),
+    path.join(recovery, 'root-2-technical.md'),
+    path.join(exported, 'root-2-technical.md'),
+  ]) {
+    const leaves = parseMarkdown(fs.readFileSync(file, 'utf8')).leaves;
+    assert.equal(leaves.some((leaf) => leaf.id === forgotten.id), false);
+    assert.equal(leaves.some((leaf) => leaf.id === retained.id && leaf.text === shared), true);
+  }
+  assert.equal(fs.existsSync(path.join(dir, '.urdr', 'generations', oldGeneration)), false);
+  fs.rmSync(exported, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('forgetting preserves unrelated tmp-pattern files', () => {
+  const secret = '- tmp deletion target';
+  const dir = treeWith(`# Root-2\n\n## Notes\n\n${secret}\n`);
+  const leaf = [...readCommittedState(dir).leaves.values()].find((item) => item.text === secret);
+  write(dir, 'something.tmp', 'unrelated temporary work\n');
+  forgetMemoryLeaf(dir, leaf.id);
+  assert.equal(fs.readFileSync(path.join(dir, 'something.tmp'), 'utf8'), 'unrelated temporary work\n');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('append rejects a stable ID already committed in another root', () => {
+  const dir = temp();
+  write(dir, 'root-1-topics.md', '# Root-1\n\n## Notes\n\n- original owner\n');
+  write(dir, 'root-2-technical.md', '# Root-2\n\n## Systems\n\n- existing system\n');
+  importMarkdown(dir);
+  const before = readCommittedState(dir);
+  const original = [...before.leaves.values()].find((leaf) => leaf.text === '- original owner');
+  const target = path.join(dir, 'root-2-technical.md');
+  const targetBefore = fs.readFileSync(target, 'utf8');
+  assert.throws(
+    () => appendLeaf(dir, 'root-2-technical.md', 'Systems', `<!-- urdr:id:${original.id} -->\n- attempted owner theft`),
+    new RegExp(`stable leaf id already exists in committed tree: ${original.id} \\(root-1-topics\\.md\\)`),
+  );
+  const after = readCommittedState(dir);
+  assert.equal(after.leaves.get(original.id).file, 'root-1-topics.md');
+  assert.equal(after.leaves.get(original.id).text, '- original owner');
+  assert.equal(fs.readFileSync(target, 'utf8'), targetBefore);
+  assert.equal([...after.leaves.values()].some((leaf) => leaf.text.includes('attempted owner theft')), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

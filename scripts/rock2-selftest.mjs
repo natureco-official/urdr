@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { readEventLog } from './lib/event-log.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readCommittedState, readEventLog } from './lib/event-log.mjs';
 import { ROOT_FILE_RE, parseMarkdown } from './lib/markdown-model.mjs';
 import { importMarkdown, reconcileMarkdown } from './lib/transaction.mjs';
 import { createRoot, main, moveEntries, splitBranch } from './migrate.mjs';
@@ -33,6 +33,14 @@ function writeTree(dir, prefix = 'root') {
 function operationTypes(dir) {
   return readEventLog(dir).records.filter((record) => record.kind === 'operation').map((record) => record.operation.type);
 }
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function waitForFile(file, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(file) && Date.now() < deadline) sleepSync(10);
+  assert.equal(fs.existsSync(file), true, `timed out waiting for ${file}`);
+}
 
 test('split uses a plan file, creates correct headings, and commits a migration event', () => {
   const dir = temp('split');
@@ -45,6 +53,54 @@ test('split uses a plan file, creates correct headings, and commits a migration 
   assert.match(content, /^## Projects \/ Mobile$/m);
   assert.doesNotMatch(content, /^## ##/m);
   assert(operationTypes(dir).includes('migration.split'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('migration holds the tree lock through commit and preserves an unrelated concurrent append', () => {
+  const dir = temp('migration-concurrency');
+  const files = writeTree(dir);
+  importMarkdown(dir);
+  const started = path.join(dir, 'append-started');
+  const done = path.join(dir, 'append-done.json');
+  const childScript = `
+    import fs from 'node:fs';
+    const { appendLeaf } = await import(process.env.URDR_APPEND_MODULE);
+    fs.writeFileSync(process.env.URDR_STARTED, 'started');
+    try {
+      const result = appendLeaf(process.env.URDR_MEMORY, process.env.URDR_ROOT, 'Rules', '- concurrent unrelated leaf');
+      fs.writeFileSync(process.env.URDR_DONE, JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      fs.writeFileSync(process.env.URDR_DONE, JSON.stringify({ ok: false, error: error.message }));
+    }
+  `;
+  let child;
+  splitBranch(path.join(dir, files[1]), 'Projects', ['Web'], {
+    afterPrepare() {
+      child = spawn(process.execPath, ['--input-type=module', '--eval', childScript], {
+        env: {
+          ...process.env,
+          URDR_APPEND_MODULE: pathToFileURL(path.join(here, 'append.mjs')).href,
+          URDR_DONE: done,
+          URDR_MEMORY: dir,
+          URDR_ROOT: files[3],
+          URDR_STARTED: started,
+        },
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      waitForFile(started);
+      sleepSync(100);
+      assert.equal(fs.existsSync(done), false, 'append should wait while migration owns the tree lock');
+    },
+  });
+  waitForFile(done);
+  const childResult = JSON.parse(fs.readFileSync(done, 'utf8'));
+  assert.equal(childResult.ok, true, childResult.error);
+  assert.ok(child);
+  const state = readCommittedState(dir);
+  assert.equal(state.leaves.get(childResult.result.id).text, '- concurrent unrelated leaf');
+  assert.match(fs.readFileSync(path.join(dir, files[1]), 'utf8'), /^## Projects \/ Web$/m);
+  assert.match(fs.readFileSync(path.join(dir, files[3]), 'utf8'), /concurrent unrelated leaf/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

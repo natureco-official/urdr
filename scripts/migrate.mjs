@@ -3,7 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hashContent, readCommittedState as readState } from './lib/event-log.mjs';
+import { eventLogPaths, hashContent, readCommittedState as readState } from './lib/event-log.mjs';
+import { acquireLeaseLock, releaseLeaseLock } from './lib/lock.mjs';
 import { findBranch, listRootFiles, parseMarkdown, ROOT_FILE_RE } from './lib/markdown-model.mjs';
 import { beginTransaction, importMarkdown, readPublishedGeneration } from './lib/transaction.mjs';
 
@@ -107,32 +108,50 @@ function addStateDiff(tx, beforeState, contents) {
   }
 }
 
-function prepare(memoryDir) {
-  importMarkdown(memoryDir);
+function prepare(memoryDir, lock) {
+  importMarkdown(memoryDir, { lock });
   return readPublishedGeneration(memoryDir).files;
 }
 
-export function splitBranch(fileArg, branchArg, subBranches) {
+function withMigrationLock(memoryDir, opts, operation) {
+  const paths = eventLogPaths(memoryDir);
+  fs.mkdirSync(paths.urdrDir, { recursive: true });
+  const lock = acquireLeaseLock(paths.lockDir, opts.lockOptions);
+  try { return operation(lock); }
+  finally { releaseLeaseLock(lock); }
+}
+
+export function splitBranch(fileArg, branchArg, subBranches, opts = {}) {
   const root = rootContext(fileArg);
   const names = [...new Set(subBranches.map(cleanBranch).filter(Boolean))];
   if (names.length === 0) fail('split requires at least one sub-branch');
-  const raw = fs.readFileSync(root.absolute, 'utf8');
-  const parent = branchRange(raw, branchArg, root.file).branch.name;
-  const existing = new Set(parseMarkdown(raw).branches.map((item) => item.name.toLocaleLowerCase()));
-  const headings = names.map((name) => `${parent} / ${name}`);
-  for (const heading of headings) if (existing.has(heading.toLocaleLowerCase())) fail(`branch already exists in ${root.file}: ${heading}`);
-  const contents = prepare(root.memoryDir);
-  const original = contents.get(root.file);
-  const updated = insertAtBranchEnd(original, parent, headings.map((heading) => [`## ${heading}`, '', '_No entries yet._']), root.file);
-  contents.set(root.file, updated);
-  const tx = beginTransaction(root.memoryDir).addOperation({ type: 'migration.split', file: root.file, branch: parent, subBranches: headings });
-  // importMarkdown made the live tree and committed state agree; its state is read lazily here.
-  addStateDiff(tx, readState(root.memoryDir), contents);
-  tx.publishRoot(root.file, updated).commit();
-  return { file: root.file, branch: parent, subBranches: headings };
+  const initial = fs.readFileSync(root.absolute, 'utf8');
+  const initialParent = branchRange(initial, branchArg, root.file).branch.name;
+  const initialBranches = new Set(parseMarkdown(initial).branches.map((item) => item.name.toLocaleLowerCase()));
+  for (const name of names) {
+    const heading = `${initialParent} / ${name}`;
+    if (initialBranches.has(heading.toLocaleLowerCase())) fail(`branch already exists in ${root.file}: ${heading}`);
+  }
+  return withMigrationLock(root.memoryDir, opts, (lock) => {
+    const raw = fs.readFileSync(root.absolute, 'utf8');
+    const parent = branchRange(raw, branchArg, root.file).branch.name;
+    const existing = new Set(parseMarkdown(raw).branches.map((item) => item.name.toLocaleLowerCase()));
+    const headings = names.map((name) => `${parent} / ${name}`);
+    for (const heading of headings) if (existing.has(heading.toLocaleLowerCase())) fail(`branch already exists in ${root.file}: ${heading}`);
+    const contents = prepare(root.memoryDir, lock);
+    opts.afterPrepare?.();
+    const original = contents.get(root.file);
+    const updated = insertAtBranchEnd(original, parent, headings.map((heading) => [`## ${heading}`, '', '_No entries yet._']), root.file);
+    contents.set(root.file, updated);
+    const tx = beginTransaction(root.memoryDir, { lock }).addOperation({ type: 'migration.split', file: root.file, branch: parent, subBranches: headings });
+    // The migration lock keeps this complete snapshot current through commit.
+    addStateDiff(tx, readState(root.memoryDir), contents);
+    tx.publishRoot(root.file, updated).commit();
+    return { file: root.file, branch: parent, subBranches: headings };
+  });
 }
 
-export function moveEntries(sourceArg, targetArg, targetBranchArg, selectors) {
+export function moveEntries(sourceArg, targetArg, targetBranchArg, selectors, opts = {}) {
   const source = rootContext(sourceArg);
   const target = sameTree(source, targetArg);
   if (selectors.length === 0) fail('move requires at least one entry selector');
@@ -143,7 +162,9 @@ export function moveEntries(sourceArg, targetArg, targetBranchArg, selectors) {
     if (hits.length === 0) fail(`entry not found in ${source.file}: ${selector}`);
     if (hits.length > 1) fail(`entry selector is ambiguous in ${source.file}: ${selector}`);
   }
-  const contents = prepare(source.memoryDir);
+  return withMigrationLock(source.memoryDir, opts, (lock) => {
+  const contents = prepare(source.memoryDir, lock);
+  opts.afterPrepare?.();
   const sourceContent = contents.get(source.file);
   const targetContent = contents.get(target.file);
   branchRange(targetContent, targetBranchArg, target.file);
@@ -167,12 +188,13 @@ export function moveEntries(sourceArg, targetArg, targetBranchArg, selectors) {
   }
   contents.set(source.file, nextSource);
   contents.set(target.file, nextTarget);
-  const tx = beginTransaction(source.memoryDir).addOperation({ type: 'migration.move', source: source.file, target: target.file, targetBranch: cleanBranch(targetBranchArg), leafIds: [...ids] });
+  const tx = beginTransaction(source.memoryDir, { lock }).addOperation({ type: 'migration.move', source: source.file, target: target.file, targetBranch: cleanBranch(targetBranchArg), leafIds: [...ids] });
   addStateDiff(tx, readState(source.memoryDir), contents);
   tx.publishRoot(source.file, nextSource);
   if (target.file !== source.file) tx.publishRoot(target.file, nextTarget);
   tx.commit();
   return { moved: ids.size, source: source.file, target: target.file, targetBranch: cleanBranch(targetBranchArg) };
+  });
 }
 
 function naming(file) {
@@ -182,10 +204,16 @@ function naming(file) {
   fail(`cannot determine naming language from ${file}`);
 }
 
-export function createRoot(nameArg, sourceArg, branchArgs) {
+export function createRoot(nameArg, sourceArg, branchArgs, opts = {}) {
   const source = rootContext(sourceArg);
   const requested = [...new Set(branchArgs.flatMap((value) => String(value).split(',')).map(cleanBranch).filter(Boolean))];
   if (requested.length === 0) fail('new-root requires at least one branch');
+  const initialFiles = listRootFiles(source.memoryDir).map((file) => path.basename(file));
+  const initialStyle = naming(source.file);
+  if (initialFiles.some((file) => naming(file).prefix !== initialStyle.prefix)) fail('memory tree mixes naming languages');
+  const initialModel = parseMarkdown(fs.readFileSync(source.absolute, 'utf8'));
+  for (const name of requested) if (!findBranch(initialModel, name)) fail(`branch not found in ${source.file}: ${name}`);
+  return withMigrationLock(source.memoryDir, opts, (lock) => {
   const allFiles = listRootFiles(source.memoryDir).map((file) => path.basename(file));
   const style = naming(source.file);
   if (allFiles.some((file) => naming(file).prefix !== style.prefix)) fail('memory tree mixes naming languages');
@@ -195,7 +223,8 @@ export function createRoot(nameArg, sourceArg, branchArgs) {
   if (!ROOT_FILE_RE.test(newFile)) fail(`generated invalid root filename: ${newFile}`);
   const rawModel = parseMarkdown(fs.readFileSync(source.absolute, 'utf8'));
   for (const name of requested) if (!findBranch(rawModel, name)) fail(`branch not found in ${source.file}: ${name}`);
-  const contents = prepare(source.memoryDir);
+  const contents = prepare(source.memoryDir, lock);
+  opts.afterPrepare?.();
   const original = contents.get(source.file);
   const model = parseMarkdown(original);
   const branches = requested.map((name) => {
@@ -220,12 +249,13 @@ export function createRoot(nameArg, sourceArg, branchArgs) {
     const addition = `${index.endsWith(nl) ? '' : nl}${nl}${metadata(stableId())}${nl}- **${style.title}-${number}** — \`${newFile}\`${nl}`;
     contents.set(indexFile, index + addition);
   }
-  const tx = beginTransaction(source.memoryDir).addOperation({ type: 'migration.new-root', source: source.file, target: newFile, branches: branches.map((item) => item.name) });
+  const tx = beginTransaction(source.memoryDir, { lock }).addOperation({ type: 'migration.new-root', source: source.file, target: newFile, branches: branches.map((item) => item.name) });
   addStateDiff(tx, readState(source.memoryDir), contents);
   tx.publishRoot(source.file, nextSource).publishRoot(newFile, newContent);
   if (indexFile) tx.publishRoot(indexFile, contents.get(indexFile));
   tx.commit();
   return { file: newFile, number, branches: branches.map((item) => item.name) };
+  });
 }
 
 function option(args, name) {

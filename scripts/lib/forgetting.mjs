@@ -35,6 +35,25 @@ function fileContains(file, needles) {
   }
 }
 
+function markdownArtifact(file, id, needles) {
+  const before = fs.readFileSync(file, 'utf8');
+  const after = removeLeafFromMarkdown(before, id);
+  if (after !== before) return { after, before, matchedBy: 'id' };
+
+  // Managed Markdown carries stable IDs. Text fallback is reserved for legacy
+  // copies whose matching leaf cannot be identified, preserving old scrub coverage
+  // without confusing an ID-bearing live leaf with the forgotten one.
+  const model = parseMarkdown(before);
+  const legacyMatch = model.leaves.some((leaf) => !leaf.id
+    && needles.some((needle) => needle.length && leaf.text.includes(needle)));
+  return { after: before, before, matchedBy: legacyMatch ? 'legacy-text' : null };
+}
+
+function artifactMatch(file, id, needles) {
+  if (/\.md$/i.test(file)) return markdownArtifact(file, id, needles);
+  return { after: null, before: null, matchedBy: fileContains(file, needles) ? 'text' : null };
+}
+
 function walkFiles(directory, visit) {
   if (!fs.existsSync(directory)) return;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -96,30 +115,34 @@ export function scrubForgottenArtifacts(memoryDir, id, text, opts = {}) {
     if (!entry.isDirectory() || entry.name === pointer?.generationId) continue;
     const directory = path.join(generationsDir, entry.name);
     let contains = false;
-    walkFiles(directory, (file) => { if (fileContains(file, needles)) contains = true; });
+    walkFiles(directory, (file) => { if (artifactMatch(file, id, needles).matchedBy) contains = true; });
     if (contains) { fs.rmSync(directory, { recursive: true, force: true }); removed.push(directory); }
   }
 
   const recovery = path.join(memory, '.urdr', 'recovery');
-  walkFiles(recovery, (file) => { if (fileContains(file, needles)) { fs.rmSync(file, { force: true }); removed.push(file); } });
+  walkFiles(recovery, (file) => {
+    const match = artifactMatch(file, id, needles);
+    if (!match.matchedBy) return;
+    if (match.matchedBy === 'id') fs.writeFileSync(file, match.after, 'utf8');
+    else fs.rmSync(file, { force: true });
+    removed.push(file);
+  });
   removeEmptyDirectories(recovery);
 
   for (const directory of readExportDirectories(memory)) {
     if (!fs.existsSync(directory)) continue;
     walkFiles(directory, (file) => {
-      if (!fileContains(file, needles)) return;
-      if (/\.md$/i.test(file)) {
-        const before = fs.readFileSync(file, 'utf8');
-        const after = removeLeafFromMarkdown(before, id);
-        if (after !== before && !needles.some((needle) => after.includes(needle))) fs.writeFileSync(file, after, 'utf8');
-        else fs.rmSync(file, { force: true });
-      } else fs.rmSync(file, { force: true });
+      const match = artifactMatch(file, id, needles);
+      if (!match.matchedBy) return;
+      if (match.matchedBy === 'id') fs.writeFileSync(file, match.after, 'utf8');
+      else fs.rmSync(file, { force: true });
       removed.push(file);
     });
   }
 
   walkFiles(memory, (file) => {
     if (!/(?:^|[.])tmp(?:[.-]|$)/i.test(path.basename(file))) return;
+    if (!fileContains(file, needles)) return;
     fs.rmSync(file, { force: true });
     removed.push(file);
   });
@@ -129,7 +152,7 @@ export function scrubForgottenArtifacts(memoryDir, id, text, opts = {}) {
   const survivors = [];
   walkFiles(memory, (file) => {
     if (path.resolve(file) === path.resolve(ledger)) return;
-    if (fileContains(file, needles)) survivors.push(file);
+    if (artifactMatch(file, id, needles).matchedBy) survivors.push(file);
   });
   if (survivors.length) throw new Error(`forget scrub incomplete; content remains in: ${survivors.join(', ')}`);
   const ledgerEncoding = JSON.stringify(normalizedText).slice(1, -1);

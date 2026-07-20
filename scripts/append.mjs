@@ -320,7 +320,11 @@ export function appendLeaf(memoryDir, rootFile, branch, leafText, opts = {}) {
 
     // A legacy tree must become authoritative before its first append. Reusing the
     // tree lock keeps concurrent first writers from racing through bootstrap.
-    if (readCommittedState(memory).checkpoints.size === 0) importMarkdown(memory, { lock });
+    let committedState = readCommittedState(memory);
+    if (committedState.checkpoints.size === 0) {
+      importMarkdown(memory, { lock });
+      committedState = readCommittedState(memory);
+    }
 
     const content = fs.readFileSync(target, 'utf8');
     const existingIds = new Set(parseMarkdown(content).leaves.map((leaf) => leaf.id).filter(Boolean));
@@ -332,6 +336,10 @@ export function appendLeaf(memoryDir, rootFile, branch, leafText, opts = {}) {
     if (appended.length !== 1) throw new Error(`append must create exactly one stable leaf; created ${appended.length}`);
 
     const { leaf, index } = appended[0];
+    const existing = committedState.leaves.get(leaf.id);
+    if (existing) {
+      throw new Error(`stable leaf id already exists in committed tree: ${leaf.id} (${existing.file})`);
+    }
     const result = beginTransaction(memory, { lock })
       .upsertLeaf({
         id: leaf.id,
