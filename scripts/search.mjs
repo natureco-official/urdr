@@ -15,7 +15,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listRootFiles, parseMarkdown } from './lib/markdown-model.mjs';
 import { recordSearchOutcome } from './lib/telemetry.mjs';
@@ -25,6 +27,105 @@ export { listRootFiles } from './lib/markdown-model.mjs';
 const REGEX_META = /[.*+?^${}()|[\]\\]/;
 const REGEX_WORKER = fileURLToPath(new URL('./lib/regex-match-worker.mjs', import.meta.url));
 const TURKISH_SUFFIXES = ['larınız', 'leriniz', 'larımız', 'lerimiz', 'ları', 'leri', 'lar', 'ler'];
+let regexWorker;
+
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { const until = Date.now() + ms; while (Date.now() < until) {} }
+}
+
+function processExists(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === 'EPERM'; }
+}
+
+function regexWorkerPaths(directory, requestId) {
+  return {
+    requestFile: path.join(directory, `${requestId}.request.json`),
+    responseFile: path.join(directory, `${requestId}.response.json`),
+  };
+}
+
+function writeJsonAtomic(file, value) {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value), { flag: 'wx' });
+  fs.renameSync(temporary, file);
+}
+
+function disposeRegexWorker(worker, force = false) {
+  if (!worker || worker.disposed) return;
+  worker.disposed = true;
+  if (regexWorker === worker) regexWorker = undefined;
+  process.removeListener('exit', worker.cleanup);
+  if (!force) {
+    try { fs.writeFileSync(path.join(worker.directory, 'stop'), ''); } catch {}
+  }
+  if (force && processExists(worker.child.pid)) {
+    try { worker.child.kill('SIGKILL'); } catch {}
+  }
+  const deadline = Date.now() + 1000;
+  while (processExists(worker.child.pid) && Date.now() < deadline) sleepSync(5);
+  if (processExists(worker.child.pid)) {
+    try { worker.child.kill('SIGKILL'); } catch {}
+  }
+  try { fs.rmSync(worker.directory, { recursive: true, force: true }); } catch {}
+}
+
+function regexWorkerHandle() {
+  if (regexWorker && processExists(regexWorker.child.pid)) return regexWorker;
+  if (regexWorker) disposeRegexWorker(regexWorker, true);
+
+  const directory = path.join(os.tmpdir(), `urdr-regex-worker-${process.pid}-${crypto.randomUUID()}`);
+  fs.mkdirSync(directory);
+  const child = spawn(process.execPath, [REGEX_WORKER, '--server', directory, String(process.pid)], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    windowsHide: true,
+  });
+  child.on('error', () => {});
+  child.unref();
+  child.channel?.unref();
+  const worker = { child, directory, disposed: false };
+  worker.cleanup = () => disposeRegexWorker(worker);
+  process.once('exit', worker.cleanup);
+  regexWorker = worker;
+  return worker;
+}
+
+function persistentRegexMatch(payload, timeoutMs) {
+  const worker = regexWorkerHandle();
+  const requestId = crypto.randomUUID();
+  const files = regexWorkerPaths(worker.directory, requestId);
+  try { writeJsonAtomic(files.requestFile, { requestId, ...payload }); }
+  catch (error) {
+    disposeRegexWorker(worker, true);
+    return { error: error.message };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (fs.existsSync(files.responseFile)) {
+      try {
+        const response = JSON.parse(fs.readFileSync(files.responseFile, 'utf8'));
+        try { fs.rmSync(files.responseFile, { force: true }); } catch {}
+        return response;
+      } catch {
+        disposeRegexWorker(worker, true);
+        return { error: 'regex worker returned invalid output' };
+      }
+    }
+    if (!processExists(worker.child.pid)) {
+      disposeRegexWorker(worker, true);
+      return { error: 'regex worker failed' };
+    }
+    if (Date.now() >= deadline) {
+      // A catastrophic regex blocks the worker's only JS thread. The process is no
+      // longer reusable: kill it and let the next request create a clean replacement.
+      disposeRegexWorker(worker, true);
+      return { timeout: true };
+    }
+    sleepSync(1);
+  }
+}
 
 function fold(value, caseSensitive = false) {
   const text = String(value).normalize('NFKC').replace(/[’`]/g, "'");
@@ -111,17 +212,15 @@ function exactMatchIndices(query, leaves, caseSensitive, timeoutMs, mode, hierar
     if (hierarchyIndices.length > 0) return { indices: hierarchyIndices, useRegex };
     return { indices: leaves.flatMap((leaf, index) => (!hierarchyCount || index >= hierarchyCount) && matching(leaf) ? [index] : []), useRegex };
   }
-  const child = spawnSync(process.execPath, [REGEX_WORKER], {
-    input: JSON.stringify({ query, caseSensitive, texts: leaves.map((leaf) => leaf.searchText), hierarchyCount }),
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    windowsHide: true,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (child.error?.code === 'ETIMEDOUT' || child.signal) return { timeout: true, useRegex };
-  if (child.status !== 0) return { error: child.stderr?.trim() || 'regex worker failed', useRegex };
-  try { return { indices: JSON.parse(child.stdout).matches, useRegex }; }
-  catch { return { error: 'regex worker returned invalid output' }; }
+  const result = persistentRegexMatch({
+    query,
+    caseSensitive,
+    texts: leaves.map((leaf) => leaf.searchText),
+    hierarchyCount,
+  }, timeoutMs);
+  if (result.timeout) return { timeout: true, useRegex };
+  if (result.error) return { error: result.error, useRegex };
+  return { indices: result.matches, useRegex };
 }
 
 function rankLeaves(leaves, query, opts, knownExact = null) {

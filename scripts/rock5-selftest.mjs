@@ -32,6 +32,11 @@ console.log('\n  🌳 Rock 5 self-test\n  ' + '─'.repeat(50));
   ok(result.timeout === true && result.count === 0, 'regex: pathological pattern returns a timeout result');
   ok(elapsed < 2000, `regex: hard deadline prevents a hang (${Math.round(elapsed)} ms)`);
   fs.writeFileSync(path.join(dir, 'root-2-technical.md'), root('Root-2', 'Safety', '- literal [ bracket'));
+  const recoveryStarted = performance.now();
+  const recovered = searchMemory(dir, 'literal \\[ bracket', { mode: 'regex', regexTimeoutMs: 300 });
+  const recoveryElapsed = performance.now() - recoveryStarted;
+  ok(recovered.count === 1 && recoveryElapsed < 2000,
+    `regex: timed-out worker is discarded and a normal query recovers promptly (${Math.round(recoveryElapsed)} ms)`);
   ok(searchMemory(dir, '[', { regexTimeoutMs: 300 }).count === 1, 'regex: invalid patterns preserve literal fallback behavior');
   ok(searchMemory(dir, '[', { mode: 'regex', regexTimeoutMs: 300 }).count === 1, 'regex: explicit mode preserves invalid-pattern literal fallback behavior');
   fs.rmSync(dir, { recursive: true, force: true });
