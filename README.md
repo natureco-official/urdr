@@ -78,13 +78,13 @@ Target: <300 tokens per retrieval
 git clone https://github.com/natureco-official/urdr.git
 cd urdr
 
-# Creates memory/ directory with 4 root files + personality
-./scripts/init.sh --path ./my-memory --lang en
+# Creates ~/my-memory with 4 root files + personality
+./scripts/init.sh --path ~/my-memory --lang en
 ```
 
 This creates:
 ```
-my-memory/
+~/my-memory/
 ├── root-0-index.md       # ← Routing map
 ├── root-1-topics.md      # ← People, projects, subjects
 ├── root-2-technical.md   # ← Systems, APIs, configs
@@ -101,7 +101,7 @@ my-memory/
 | **OpenClaw** | Use `integrations/openclaw/README.md` to expose the index as `MEMORY.md` and keep domain roots under `memory/` |
 | **NatureCo CLI** | Copy `integrations/natureco/plugin.yaml` into your NatureCo config |
 | **Hermes** | Copy `integrations/hermes/skill.yaml` into your Hermes skills dir |
-| **Codex CLI** | `codex mcp add urdr -- node scripts/mcp-server.mjs --root ./my-memory` |
+| **Codex CLI** | `npm ci && codex mcp add urdr -- node scripts/mcp-server.mjs --root ~/my-memory` |
 | **Other agent?** | Load `root-0-index.md` at session start, then read the routed domain root on demand. See `AGENTS.md` |
 
 **Can't find your agent?** Doesn't matter. Urðr is just Markdown files. Any agent that can read files can use it — tell it to load `root-0-index.md` at session start and you're done.
@@ -195,7 +195,7 @@ fixed filesystem root. Tool-call `memoryDir` values are relative to this root; a
 parent traversal, and symlinks that resolve outside it are rejected.
 
 ```bash
-node scripts/mcp-server.mjs --root ./my-memory
+node scripts/mcp-server.mjs --root ~/my-memory
 ```
 
 The server exposes seven namespaced tools: `urdr_search`, `urdr_append`, `urdr_lint`,
@@ -231,12 +231,12 @@ Urðr ships a **hybrid last-resort search** that closes this gap without touchin
 
 ```bash
 # When the 4-step protocol comes up empty, scan everything (branch-aware):
-node scripts/search.mjs "sqltie karar" ./my-memory
+node scripts/search.mjs "sqltie karar" ~/my-memory
 # → root-2-technical.md › ## APIs › **04.07.2026 — chose SQLite for local storage**
 
 # Override metacharacter auto-detection when the query syntax must be explicit:
-node scripts/search.mjs "foo.bar" ./my-memory --literal
-node scripts/search.mjs "foo.*bar" ./my-memory --regex
+node scripts/search.mjs "foo.bar" ~/my-memory --literal
+node scripts/search.mjs "foo.*bar" ~/my-memory --regex
 ```
 
 - **LLM-free, no embeddings, no network call** — exact/regex matching, then trigram-similarity fuzzy ranking over lightly stemmed tokens (with Turkish agglutinative-suffix stripping) catches typos and different inflections a literal scan would miss entirely.
@@ -292,9 +292,9 @@ Markdown files are the human-readable surface; the actual source of truth is an 
 - **Memory compiler (`scripts/compiler.mjs`).** Turns lint findings into a concrete dry-run plan — deterministic branch-split proposals (keyword/Jaccard clustering, no ML), index diffs, and unambiguous reference repairs — bound to the current event-log head hash. Apply rejects a stale plan and any action not reproduced by a fresh trusted dry run, then publishes the approved actions as one atomic transaction.
 
 ```bash
-node scripts/compiler.mjs ./my-memory --out plan.json   # dry-run, changes nothing
-node scripts/compiler.mjs ./my-memory --apply plan.json # apply an approved, still-fresh plan
-node scripts/forget.mjs ./my-memory --id <stable-id> --reason "..."
+node scripts/compiler.mjs ~/my-memory --out plan.json   # dry-run, changes nothing
+node scripts/compiler.mjs ~/my-memory --apply plan.json # apply an approved, still-fresh plan
+node scripts/forget.mjs ~/my-memory --id <stable-id> --reason "..."
 ```
 
 ## Concurrency-Safe Writes (`scripts/append.mjs`)
@@ -304,7 +304,7 @@ The instant more than one writer touches the same memory, naive "read file → r
 `append.mjs` makes a leaf-append atomic and serialized:
 
 ```bash
-node scripts/append.mjs ./my-memory root-2-technical.md "APIs" "**04.07.2026 — chose SQLite — ok**"
+node scripts/append.mjs ~/my-memory root-2-technical.md "APIs" "**04.07.2026 — chose SQLite — ok**"
 ```
 
 - **Lease lock, not a bare advisory mkdir.** A persistent lease-service process, reused across acquisitions for the caller's lifetime, acquires and renews each lock on its own timer — a busy writer's blocked event loop can't cause a false "stale lock" steal, and a genuinely crashed writer's lock still gets reclaimed safely (token-checked, so a former owner can never delete a successor's lock).
@@ -319,7 +319,7 @@ Verified in CI on Linux, macOS, and Windows: 6 concurrent writers → 6 leaves, 
 A cross-platform command audits the failure modes that erode retrieval as the tree grows and exits non-zero on errors (CI/pre-commit guard):
 
 ```bash
-node scripts/lint.mjs ./my-memory
+node scripts/lint.mjs ~/my-memory
 ```
 
 1. **Growth** — root with 9+ branches, branch with 50+ leaves → split signals

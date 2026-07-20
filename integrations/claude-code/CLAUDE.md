@@ -11,10 +11,10 @@ This project uses **Urðr**, a tree-structured memory system with 4 roots:
 
 | Root | File | Contents |
 |------|------|----------|
-| Root-0 | `memory/root-0-index.md` | Index & routing |
-| Root-1 | `memory/root-1-topics.md` | People, projects, subjects |
-| Root-2 | `memory/root-2-technical.md` | Systems, APIs, technical |
-| Root-3 | `memory/root-3-decisions.md` | ADRs, constraints, lessons |
+| Root-0 | `~/my-memory/root-0-index.md` | Index & routing |
+| Root-1 | `~/my-memory/root-1-topics.md` | People, projects, subjects |
+| Root-2 | `~/my-memory/root-2-technical.md` | Systems, APIs, technical |
+| Root-3 | `~/my-memory/root-3-decisions.md` | ADRs, constraints, lessons |
 
 ---
 
@@ -22,9 +22,9 @@ This project uses **Urðr**, a tree-structured memory system with 4 roots:
 
 ### At Session Start
 
-1. Read `memory/root-0-index.md` — understand the map
-2. Read `memory/root-3-decisions.md` → `## Pending` branch — check what needs attention
-3. Read `memory/agent-personality.md` — adopt the agent persona
+1. Read `~/my-memory/root-0-index.md` — understand the map
+2. Read `~/my-memory/root-3-decisions.md` → `## Pending` branch — check what needs attention
+3. Read `~/my-memory/agent-personality.md` — adopt the agent persona
 
 ### When Learning New Information
 
@@ -83,11 +83,11 @@ When information belongs to multiple roots:
 ## Maintenance
 
 ```bash
-# Run the memory health audit
-node ./scripts/lint.mjs ./memory
+# Run these commands from the Urðr checkout
+node ./scripts/lint.mjs ~/my-memory
 
-# Init memory in a new project
-./scripts/init.sh
+# Init memory outside the Urðr checkout
+./scripts/init.sh --path ~/my-memory --lang en
 
 # Inspect transactional restructuring operations
 node ./scripts/migrate.mjs --help
