@@ -72,7 +72,10 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
     assert.equal(listed.tools.find((tool) => tool.name === 'urdr_compile_plan').annotations.readOnlyHint, true);
     assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_apply_plan').annotations,
       { readOnlyHint: false, destructiveHint: false, openWorldHint: false });
-    assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_search').inputSchema.properties.mode,
+    const searchTool = listed.tools.find((tool) => tool.name === 'urdr_search');
+    assert.equal(searchTool.annotations.readOnlyHint, true);
+    assert.equal(Object.hasOwn(searchTool.inputSchema.properties, 'telemetry'), false);
+    assert.deepEqual(searchTool.inputSchema.properties.mode,
       { type: 'string', enum: ['auto', 'literal', 'regex'], default: 'auto' });
     assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_resume_forgetting').annotations,
       { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
@@ -90,6 +93,12 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
     assert.equal(searched.count, 1);
     assert.equal(searched.results[0].branch, 'Notes');
     assert.match(searched.results[0].text, /unique-rock6d-memory/);
+    assert.equal(fs.existsSync(path.join(memory, '.urdr', 'search-telemetry.json')), false);
+
+    const telemetryAttempt = value(await client.callTool({ name: 'urdr_search', arguments: {
+      memoryDir: 'memory', query: 'unique-rock6d-memory', telemetry: true,
+    } }));
+    assert.equal(telemetryAttempt.count, 1);
     assert.equal(fs.existsSync(path.join(memory, '.urdr', 'search-telemetry.json')), false);
 
     value(await client.callTool({ name: 'urdr_append', arguments: {

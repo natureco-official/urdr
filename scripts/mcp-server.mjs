@@ -21,7 +21,7 @@ const memoryDirSchema = stringSchema('Relative memory-tree directory beneath the
 export const TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'urdr_search',
-    description: 'Search a confined Urdr memory tree. Search telemetry is opt-in and remains disabled unless telemetry=true.',
+    description: 'Search a confined Urdr memory tree without writing search telemetry.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['query'],
       properties: {
@@ -31,7 +31,6 @@ export const TOOL_DEFINITIONS = Object.freeze([
         caseSensitive: { type: 'boolean' },
         maxResults: { type: 'integer', minimum: 0, maximum: 1000 },
         regexTimeoutMs: { type: 'integer', minimum: 10, maximum: 10000 },
-        telemetry: { type: 'boolean', default: false },
         hierarchyFiles: { type: 'array', maxItems: 64, items: stringSchema('Relative root filename inside memoryDir.', 255) },
       },
     },
@@ -200,7 +199,6 @@ function executeTool(serveRoot, name, rawArguments) {
       caseSensitive: optionalBoolean(args, 'caseSensitive'),
       maxResults: optionalInteger(args, 'maxResults', 0, 1000),
       regexTimeoutMs: optionalInteger(args, 'regexTimeoutMs', 10, 10000),
-      telemetry: optionalBoolean(args, 'telemetry') ?? false,
       hierarchyFiles,
     });
   }
