@@ -108,7 +108,7 @@ This creates:
 | **OpenClaw** | Use `integrations/openclaw/README.md` to expose the index as `MEMORY.md` and keep domain roots under `memory/` |
 | **NatureCo CLI** | Copy `integrations/natureco/plugin.yaml` into your NatureCo config |
 | **Hermes** | Copy `integrations/hermes/skill.yaml` into your Hermes skills dir |
-| **Codex CLI** | `npm ci && codex mcp add urdr -- node scripts/mcp-server.mjs --root ~/my-memory` |
+| **Codex CLI** | `codex mcp add urdr -- npx -y urdr-mcp-server --root ~/my-memory` |
 | **Other agent?** | Load `root-0-index.md` at session start, then read the routed domain root on demand. See `AGENTS.md` |
 
 **Can't find your agent?** Doesn't matter. Urðr is just Markdown files. Any agent that can read files can use it — tell it to load `root-0-index.md` at session start and you're done.
@@ -197,11 +197,14 @@ urdr/
 
 ## MCP Server
 
-Install the locked official MCP SDK dependency with `npm ci`, then configure the server with one
-fixed filesystem root. Tool-call `memoryDir` values are relative to this root; absolute paths,
-parent traversal, and symlinks that resolve outside it are rejected.
+Run the published package directly with `npx`—no separate install step is needed. For a local
+checkout, run `npm ci` first, then use the repository script. Configure the server with one fixed
+filesystem root. Tool-call `memoryDir` values are relative to this root; absolute paths, parent
+traversal, and symlinks that resolve outside it are rejected.
 
 ```bash
+npx -y urdr-mcp-server --root ~/my-memory
+# or, from a local checkout after npm ci:
 node scripts/mcp-server.mjs --root ~/my-memory
 ```
 
@@ -210,8 +213,8 @@ The server exposes seven namespaced tools: `urdr_search`, `urdr_append`, `urdr_l
 Compiler planning is read-only; apply keeps the committed tree-state staleness check and accepts
 only actions reproduced by a fresh trusted dry run. Forgetting is marked and described as a
 consequential user-triggered erasure action, while resume is an idempotent completion of an already
-committed forget. The package is intentionally not published; use the
-checkout directly or install a locally produced `npm pack` tarball.
+committed forget. The `urdr-mcp-server` package is published on npm; the local-checkout command
+remains available for contributors and development.
 
 ---
 
