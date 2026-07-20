@@ -45,15 +45,21 @@ command -v node >/dev/null 2>&1 || die "node is required"
 command -v git >/dev/null 2>&1 || die "git is required"
 
 if [[ -z "$TARGET_DIR" ]]; then
-  read -rp "Memory directory [./memory]: " TARGET_DIR
+  if [[ -t 0 ]]; then
+    read -rp "Memory directory [./memory]: " TARGET_DIR
+  fi
   TARGET_DIR="${TARGET_DIR:-./memory}"
 fi
 if [[ -z "$AGENT_NAME" ]]; then
-  read -rp "Agent name [Agent]: " AGENT_NAME
+  if [[ -t 0 ]]; then
+    read -rp "Agent name [Agent]: " AGENT_NAME
+  fi
   AGENT_NAME="${AGENT_NAME:-Agent}"
 fi
 if [[ -z "$USER_NAME" ]]; then
-  read -rp "Your name [User]: " USER_NAME
+  if [[ -t 0 ]]; then
+    read -rp "Your name [User]: " USER_NAME
+  fi
   USER_NAME="${USER_NAME:-User}"
 fi
 

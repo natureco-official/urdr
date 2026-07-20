@@ -36,8 +36,16 @@ jobs:
         run: node scripts/migrate.mjs --help
 
       - name: Init CLI entry point
-        run: bash scripts/init.sh --help
         shell: bash
+        run: |
+          bash scripts/init.sh --help
+          init_target="$RUNNER_TEMP/urdr-init-check"
+          bash scripts/init.sh --path "$init_target" --lang en
+          test -f "$init_target/root-0-index.md"
+          test -f "$init_target/root-1-topics.md"
+          test -f "$init_target/root-2-technical.md"
+          test -f "$init_target/root-3-decisions.md"
+          test -f "$init_target/agent-personality.md"
 
       # Benchmark doubles as a guard: exits non-zero on any write-fidelity loss.
       - name: Benchmark (fidelity + recall guard)

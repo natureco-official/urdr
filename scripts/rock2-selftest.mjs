@@ -177,8 +177,33 @@ test('new-root uses the next dynamic number, valid naming language, moves branch
 });
 
 function init(args, cwd) {
-  return spawnSync('bash', [path.join(here, 'init.sh'), ...args], { cwd, encoding: 'utf8' });
+  return spawnSync('bash', [path.join(here, 'init.sh'), ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
+
+test('init uses documented defaults when stdin is closed and only path/lang are supplied', () => {
+  const dir = temp('init-non-interactive');
+  const target = path.join(dir, 'memory');
+  const result = init(['--path', target, '--lang', 'en'], dir);
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of [
+    'root-0-index.md',
+    'root-1-topics.md',
+    'root-2-technical.md',
+    'root-3-decisions.md',
+    'agent-personality.md',
+  ]) {
+    assert.equal(fs.statSync(path.join(target, file)).isFile(), true, `${file} was not created`);
+  }
+  const personality = fs.readFileSync(path.join(target, 'agent-personality.md'), 'utf8');
+  assert.match(personality, /^\*\*Name:\*\* Agent$/m);
+  assert.match(personality, /I work with User as a partner/);
+  assert.doesNotMatch(personality, /\[Agent Name\]|\[User Name\]/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 test('init rejects invalid and removed both language modes without creating a target', () => {
   const dir = temp('init-lang');
