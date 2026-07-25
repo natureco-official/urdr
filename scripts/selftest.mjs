@@ -623,6 +623,39 @@ console.log('\n  🌳 Urðr self-test\n  ' + '─'.repeat(50));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ── CLI: --root is accepted everywhere ─────────────────────────────
+// The MCP server takes `--root`, so people reach for it in the scripts too. It used to be
+// swallowed: search.mjs treated the directory as the query ("no root-*.md files in <query>")
+// and lint.mjs rejected the flag outright. Both accept it now, and the positional form has to
+// keep working — the first attempt at the lint fix silently skipped the positional argument.
+{
+  const dir = tmpTree();
+  const run = (script, args) => spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL(`./${script}`, import.meta.url)), ...args],
+    { encoding: 'utf8', windowsHide: true },
+  );
+
+  const searchFlag = run('search.mjs', ['APIs', '--root', dir]);
+  const searchPositional = run('search.mjs', ['APIs', dir]);
+  ok(!/no root-\*\.md files/.test(searchFlag.stdout + searchFlag.stderr),
+    'cli: search.mjs --root is not mistaken for the query');
+  ok(searchFlag.stdout === searchPositional.stdout,
+    'cli: search.mjs --root and positional directory agree');
+
+  const lintFlag = run('lint.mjs', ['--root', dir, '--json']);
+  const lintPositional = run('lint.mjs', [dir, '--json']);
+  ok(!/unknown option/.test(lintFlag.stderr), 'cli: lint.mjs accepts --root');
+  ok(JSON.parse(lintFlag.stdout).dir === JSON.parse(lintPositional.stdout).dir,
+    'cli: lint.mjs --root and positional directory resolve to the same tree');
+
+  const lintMissingValue = run('lint.mjs', ['--root']);
+  ok(lintMissingValue.status === 2 && /--root requires a directory/.test(lintMissingValue.stderr),
+    'cli: lint.mjs --root without a value fails loudly');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Rock-focused suites stay isolated so their CLI/process fixtures cannot leak state into
 // the long-running concurrency suite, but they are still part of this canonical proof run.
 for (const [file, label] of [['rock2-selftest.mjs', 'Rock 2'], ['rock3-selftest.mjs', 'Rock 3'], ['rock5-selftest.mjs', 'Rock 5'], ['rock6c-selftest.mjs', 'Rock 6C'], ['rock6d-selftest.mjs', 'Rock 6D']]) {

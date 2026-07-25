@@ -104,7 +104,7 @@ This creates:
 | Agent | Just do this |
 |-------|-------------|
 | **OpenCode** | Copy `integrations/opencode/SKILL.md` to your `.opencode/skills/` dir |
-| **Claude Code** | `cp integrations/claude-code/CLAUDE.md ./my-project/CLAUDE.md` |
+| **Claude Code** | Hand it [`integrations/claude-code/CLAUDE.md`](integrations/claude-code/CLAUDE.md) and say "set this up" — that file walks it through installing the MCP server, building the tree, registering itself, and pointing Claude Code's own memory index at Urðr (the step that makes recall automatic) |
 | **OpenClaw** | Use `integrations/openclaw/README.md` to expose the index as `MEMORY.md` and keep domain roots under `memory/` |
 | **NatureCo CLI** | Copy `integrations/natureco/plugin.yaml` into your NatureCo config |
 | **Hermes** | Copy `integrations/hermes/skill.yaml` into your Hermes skills dir |

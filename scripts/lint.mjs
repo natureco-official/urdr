@@ -157,9 +157,16 @@ function isMain() {
 
 if (isMain()) {
   const argv = process.argv.slice(2);
-  const unknown = argv.filter((arg) => arg.startsWith('--') && !['--json', '--verbose', '--fail-on-warn'].includes(arg));
+  const unknown = argv.filter((arg) => arg.startsWith('--') && !['--json', '--verbose', '--fail-on-warn', '--root'].includes(arg));
   if (unknown.length) { console.error(`unknown option: ${unknown[0]}`); process.exit(2); }
-  const dir = argv.find((arg) => !arg.startsWith('--')) || process.cwd();
+  // `--root <dir>` is an alias for the positional directory, so one flag works everywhere:
+  // here, in search.mjs, and in the MCP server.
+  const rootIndex = argv.indexOf('--root');
+  if (rootIndex >= 0 && !argv[rootIndex + 1]) { console.error('--root requires a directory'); process.exit(2); }
+  const rootValueIndex = rootIndex >= 0 ? rootIndex + 1 : -1;
+  const dir = (rootIndex >= 0 ? argv[rootValueIndex] : undefined)
+    || argv.find((arg, index) => !arg.startsWith('--') && index !== rootValueIndex)
+    || process.cwd();
   const json = argv.includes('--json');
   const failOnWarn = argv.includes('--fail-on-warn');
   const { findings, files } = lintTree(dir);

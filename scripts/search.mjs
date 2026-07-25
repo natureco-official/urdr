@@ -332,12 +332,17 @@ if (isMain()) {
     process.exit(2);
   }
   const valueAfter = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
-  const optionsWithValues = new Set([valueAfter('--max'), valueAfter('--regex-timeout')].filter(Boolean));
+  // `--root` mirrors the flag the MCP server takes, because that is what people reach for
+  // first. Its value has to leave the positional list too — otherwise the directory slides
+  // into the query slot and the search reports "no root-*.md files in <your query>".
+  const optionsWithValues = new Set(
+    [valueAfter('--max'), valueAfter('--regex-timeout'), valueAfter('--root')].filter(Boolean),
+  );
   const positional = argv.filter((arg) => !arg.startsWith('--') && !optionsWithValues.has(arg));
   const query = positional[0];
-  const memoryDir = positional[1] || process.cwd();
+  const memoryDir = valueAfter('--root') || positional[1] || process.cwd();
   if (!query) {
-    console.error('Usage: node search.mjs <query> [memoryDir] [--literal|--regex] [--case] [--json] [--max N] [--regex-timeout MS] [--telemetry]');
+    console.error('Usage: node search.mjs <query> [memoryDir | --root <dir>] [--literal|--regex] [--case] [--json] [--max N] [--regex-timeout MS] [--telemetry]');
     process.exit(2);
   }
   const res = searchMemory(memoryDir, query, {
