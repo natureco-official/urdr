@@ -10,7 +10,7 @@
 **Urðr** (pronounced *urth*) is an open-source **tree-structured memory architecture** designed for AI coding agents. Named after the Norse Norn of the past who dwells at the root of Yggdrasil, Urðr gives your AI agent a persistent, organized, and fast-retrieval memory system that survives across sessions. Unlike a vector database or an opaque memory blob, Urðr's source of truth is a plain, git-diffable Markdown tree backed by a crash-consistent event log — you can see exactly what your agent remembered, when, and why.
 
 **Proof, not promises:**
-- **138 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **143 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
