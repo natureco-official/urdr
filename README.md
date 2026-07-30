@@ -381,6 +381,7 @@ Together they water Yggdrasil's roots from the Well of Urðr, keeping the tree a
 - [**NatureCo CLI**](https://github.com/natureco-official/natureco-cli) — A terminal-native AI assistant: chat, a coding agent, automation, and bots on Telegram, Discord and Slack
 - [**CodeDNA**](https://github.com/natureco-official/codedna) — How much of a commit was written by AI, and does its author actually understand it?
 - [**NatureCo SDK**](https://github.com/natureco-official/natureco-sdk) — JavaScript SDK for the NatureCo API — build AI chatbots and ship them anywhere
+- [**Skuld**](https://github.com/natureco-official/natureco-skuld) — An agentic coding workspace that will not claim success it cannot prove — every change goes through a verification gate before it is reported as done
 - [**Verðandi**](https://github.com/natureco-official/verdandi) — Task-context compiler for AI coding agents — indexes with the TypeScript AST so the agent stops burning tokens hunting for the right file
 
 <sub>Part of the **NatureCo** ecosystem — [natureco.me](https://natureco.me) · NatureCo ekosisteminin parçası</sub>
