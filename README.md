@@ -5,12 +5,25 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)]()
 [![Tooling](https://img.shields.io/badge/tooling-LLM--free-brightgreen)]()
 
-> **"The past is never dead. It's not even past."** — Faulkner
+**Give your coding agent a memory that survives the session — and costs
+~375 tokens to wake up, no matter how big it grows.**
 
-**Urðr** (pronounced *urth*) is an open-source **tree-structured memory architecture** designed for AI coding agents. Named after the Norse Norn of the past who dwells at the root of Yggdrasil, Urðr gives your AI agent a persistent, organized, and fast-retrieval memory system that survives across sessions. Unlike a vector database or an opaque memory blob, Urðr's source of truth is a plain, git-diffable Markdown tree backed by a crash-consistent event log — you can see exactly what your agent remembered, when, and why.
+Plain Markdown you can read and git-diff, backed by a crash-consistent,
+hash-chained event log. No vector DB, no embeddings, no LLM calls, no
+network. One MCP call (`urdr_context`) replaces reading root files at
+session start: **measured 93–227× cheaper** than the file protocol it
+replaces, flat at any tree size. Ask questions (`urdr_ask`), trace evidence
+chains between concepts (`urdr_path`), and watch your whole brain rotate
+in the browser (**Urðr Tree**) — all deterministic, all local.
+
+```bash
+npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
+```
+
+Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **143 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **183 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
@@ -71,6 +84,17 @@ No CDN, no network calls — the brain never leaves your machine. Community
 detection is dependency-free Louvain over the memory graph; communities that
 cross branch boundaries are flagged ⚡ because they are the real signal that
 two branches are secretly one topic.
+
+---
+
+## The name
+
+> **"The past is never dead. It's not even past."** — Faulkner
+
+**Urðr** (pronounced *urth*) is the Norse Norn of the past, who dwells at
+the root of Yggdrasil and waters the world-tree from the well of what has
+been. A fitting name for a memory: roots, branches, leaves — and nothing
+truly forgotten unless you choose to forget it.
 
 ## Why Urðr?
 
