@@ -5,6 +5,7 @@ import { parseMarkdown } from './markdown-model.mjs';
 import { canonicalJson, eventLogPaths, hashContent, readCommittedState, readEventLog } from './event-log.mjs';
 import { acquireLeaseLock, assertLeaseOwned, releaseLeaseLock } from './lock.mjs';
 import { beginTransaction, loadRootContents, populateTransactionFromViews } from './transaction.mjs';
+import { invalidatePack } from './context-pack.mjs';
 
 function removeEmptyDirectories(directory) {
   if (!fs.existsSync(directory)) return;
@@ -104,6 +105,11 @@ export function enforceArtifactRetention(memoryDir, opts = {}) {
 
 export function scrubForgottenArtifacts(memoryDir, id, text, opts = {}) {
   const memory = path.resolve(memoryDir);
+  // Bağlam paketi türetilmiş bir kopyadır ve yaprak metni içerir; scrub
+  // doğrulaması tüm dosyaları gezdiği için paket burada silinir (tek boğaz —
+  // hem forgetMemoryLeaf hem resumeForgottenArtifactScrubs buradan geçer).
+  // Sonraki loadPack unutulmuş yaprağı zaten içermeyen kaynaktan yeniden üretir.
+  invalidatePack(memory);
   const normalizedText = String(text);
   const needles = [...new Set([normalizedText, normalizedText.replace(/\r?\n/g, '\r\n')])];
   const removed = [];

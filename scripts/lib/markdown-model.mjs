@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const ROOT_FILE_RE = /^(?:(?:root|kök|kok)-)?\d[-_].*\.md$/i;
+/**
+ * Çok haneli kök numarası desteklenir (root-10-….md). Eski kalıp `\d[-_]`
+ * tek haneyle sınırlıydı: root-10 ve sonrası arama/lint/derleyici için
+ * görünmezdi — dosya durur, kimse okumazdı. 10 kök × 9 dal × 50 yaprakta
+ * (~4.500 yaprak) sessiz bir tavana dönüşüyordu (bkz: feat/context-pack).
+ */
+export const ROOT_FILE_RE = /^(?:(?:root|kök|kok)-)?\d+[-_].*\.md$/i;
 export const EMPTY_PLACEHOLDER_RE = /^_(?:no entries yet|henüz kayıt yok)\._$/i;
 
 const ATX_HEADING_RE = /^( {0,3})(#{1,6})(?:[ \t]+(.*?)[ \t]*|[ \t]*)$/;

@@ -10,6 +10,9 @@ import { applyCompilerPlan, compileDryRun } from './compiler.mjs';
 import { forgetMemoryLeaf, resumeForgottenArtifactScrubs } from './lib/forgetting.mjs';
 import { lintTree } from './lint.mjs';
 import { searchMemory } from './search.mjs';
+import { estimateTokens, loadPack, readLeavesById, relatedLeaves, treeMap } from './lib/context-pack.mjs';
+import { askMemory, pathBetween } from './lib/memory-query.mjs';
+import { buildReport, detectCommunities } from './lib/graph-intel.mjs';
 
 export const MAX_QUERY_LENGTH = 4096;
 export const MAX_LEAF_TEXT_LENGTH = 64 * 1024;
@@ -33,6 +36,85 @@ export const TOOL_DEFINITIONS = Object.freeze([
         regexTimeoutMs: { type: 'integer', minimum: 10, maximum: 10000 },
         hierarchyFiles: { type: 'array', maxItems: 64, items: stringSchema('Relative root filename inside memoryDir.', 255) },
       },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_context',
+    description: 'ONE-CALL SESSION START. Compiled ~350-token brief of the whole tree: map, recent dated entries with leaf ids, hottest nodes, growth warnings. Replaces reading root files at session start.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_map',
+    description: 'Tree skeleton only: roots, branches, leaf counts (~80 tokens). Use to route before searching; never read whole root files for orientation.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_read',
+    description: 'Full text of specific leaves by stable id (from urdr_search / urdr_context / urdr_related). Surgical read — only the requested leaves are returned, never whole files.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['ids'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        ids: { type: 'array', minItems: 1, maxItems: 32, items: stringSchema('Stable leaf id.', 512) },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_related',
+    description: 'Token-budgeted neighborhood of one leaf over the memory graph. EXTRACTED edges (explicit edge:/bkz:) rank before INFERRED (same-branch adjacency); every result carries its provenance tier.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['leafId'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        leafId: stringSchema('Origin leaf id.', 512),
+        budgetTokens: { type: 'integer', minimum: 50, maximum: 4000 },
+        depth: { type: 'integer', minimum: 1, maximum: 3 },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_ask',
+    description: 'ONE-CALL question answering: search seeds the memory graph, the neighborhood expands it, and a token-budgeted markdown answer comes back with full leaf texts, related headlines, and provenance tiers on every line. No LLM, fully deterministic.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['question'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        question: stringSchema('Natural-language question or keywords.', MAX_QUERY_LENGTH),
+        budgetTokens: { type: 'integer', minimum: 100, maximum: 4000 },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_path',
+    description: 'Cheapest evidence chain between two concepts (Dijkstra; explicit EXTRACTED references cost less than INFERRED adjacency). Accepts leaf ids or search queries; every hop carries its via/tier.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['from', 'to'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        from: stringSchema('Start: leaf id or search query.', MAX_QUERY_LENGTH),
+        to: stringSchema('End: leaf id or search query.', MAX_QUERY_LENGTH),
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_report',
+    description: 'Deterministic whole-tree structure report: god nodes, communities crossing branch boundaries (Louvain), surprising cross-root connections. Same tree yields the same report.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -201,6 +283,47 @@ function executeTool(serveRoot, name, rawArguments) {
       regexTimeoutMs: optionalInteger(args, 'regexTimeoutMs', 10, 10000),
       hierarchyFiles,
     });
+  }
+
+  if (name === 'urdr_context') {
+    const pack = loadPack(memory);
+    return { digest: pack.digest, tokensApprox: estimateTokens(pack.digest), stamp: pack.stamp, rebuilt: pack.rebuilt };
+  }
+
+  if (name === 'urdr_map') {
+    const pack = loadPack(memory);
+    return { map: treeMap(pack), stamp: pack.stamp };
+  }
+
+  if (name === 'urdr_read') {
+    const ids = args.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 32) throw new Error('ids must contain 1..32 leaf ids');
+    for (const id of ids) requiredString({ id }, 'id', 512);
+    return { leaves: readLeavesById(memory, ids) };
+  }
+
+  if (name === 'urdr_related') {
+    const leafId = requiredString(args, 'leafId', 512);
+    const pack = loadPack(memory);
+    return relatedLeaves(pack, leafId, {
+      budgetTokens: optionalInteger(args, 'budgetTokens', 50, 4000),
+      depth: optionalInteger(args, 'depth', 1, 3),
+    });
+  }
+
+  if (name === 'urdr_ask') {
+    const question = requiredString(args, 'question', MAX_QUERY_LENGTH);
+    return askMemory(memory, question, { budgetTokens: optionalInteger(args, 'budgetTokens', 100, 4000) });
+  }
+
+  if (name === 'urdr_path') {
+    return pathBetween(memory, requiredString(args, 'from', MAX_QUERY_LENGTH), requiredString(args, 'to', MAX_QUERY_LENGTH));
+  }
+
+  if (name === 'urdr_report') {
+    const pack = loadPack(memory);
+    const assignment = detectCommunities(pack);
+    return { report: buildReport(pack, assignment), stamp: pack.stamp };
   }
 
   if (name === 'urdr_append') {

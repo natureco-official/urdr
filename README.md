@@ -5,12 +5,25 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)]()
 [![Tooling](https://img.shields.io/badge/tooling-LLM--free-brightgreen)]()
 
-> **"The past is never dead. It's not even past."** — Faulkner
+**Give your coding agent a memory that survives the session — and costs
+~375 tokens to wake up, no matter how big it grows.**
 
-**Urðr** (pronounced *urth*) is an open-source **tree-structured memory architecture** designed for AI coding agents. Named after the Norse Norn of the past who dwells at the root of Yggdrasil, Urðr gives your AI agent a persistent, organized, and fast-retrieval memory system that survives across sessions. Unlike a vector database or an opaque memory blob, Urðr's source of truth is a plain, git-diffable Markdown tree backed by a crash-consistent event log — you can see exactly what your agent remembered, when, and why.
+Plain Markdown you can read and git-diff, backed by a crash-consistent,
+hash-chained event log. No vector DB, no embeddings, no LLM calls, no
+network. One MCP call (`urdr_context`) replaces reading root files at
+session start: **measured 93–227× cheaper** than the file protocol it
+replaces, flat at any tree size. Ask questions (`urdr_ask`), trace evidence
+chains between concepts (`urdr_path`), and watch your whole brain rotate
+in the browser (**Urðr Tree**) — all deterministic, all local.
+
+```bash
+npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
+```
+
+Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **143 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **183 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
@@ -21,6 +34,67 @@
 > 🤖 **Are you an AI agent reading this?** Stop. Go read **[AGENTS.md](./AGENTS.md)** first — it has your direct instructions. Come back here after you've onboarded yourself. (Yes, this repo is designed for you to self-configure.)
 
 ---
+
+### Claude Desktop — one-click install (.mcpb)
+
+Download `urdr-memory-<version>.mcpb` from Releases and **double-click it**.
+Claude Desktop asks for your memory folder (pick an empty one to start
+fresh — templates ship inside the bundle) and runs the server with its own
+Node runtime. No npm, no terminal, no config file.
+
+Build it yourself: `npm run mcpb` → `dist/urdr-memory-<version>.mcpb`
+(validated and packed with the official `@anthropic-ai/mcpb` tooling;
+the bundle is fully self-contained).
+
+## Context Pack — 93–227× fewer tokens, measured
+
+Agents used to re-orient from raw Markdown every session: the 4-file session
+protocol costs ~35k tokens on a mature tree, and every "hierarchy-first"
+lookup loads a whole root file. The Context Pack compiles the tree into
+`.urdr/pack/` (catalog + graph + a ≤~375-token session brief) —
+deterministically, with **zero LLM calls and zero dependencies**, stamped
+against the root files and event log so a stale pack is impossible.
+
+| tree size | session: old → new | factor | lookup: old → new | factor |
+|---|---|---|---|---|
+| 1,120 leaves | 34,737 → **375** | **93×** | 14,967 → 576 | 26× |
+| 4,500 leaves | 53,216 → **375** | **142×** | 24,261 → 576 | 42× |
+| 9,000 leaves | 85,236 → **375** | **227×** | 40,370 → 576 | 70× |
+
+The brief is **O(1)**: the tree grew 8× and the session cost did not move.
+Numbers are `chars/4` estimates from `node scripts/context-bench.mjs`
+(seeded synthetic trees; the bench prints its own honesty notes — leaves are
+~2 lines, so real long-leaf trees make the OLD side worse, not better).
+
+New MCP tools: `urdr_context` (one-call session start), `urdr_map`
+(~80-token skeleton), `urdr_read` (full text of specific leaf ids),
+`urdr_related` (token-budgeted graph neighborhood; every result labeled
+EXTRACTED — explicit `edge:`/`bkz:` — or INFERRED — same-branch adjacency).
+
+## Urðr Tree — see your whole brain locally
+
+```
+node scripts/tree.mjs ~/my-memory --serve     # → http://127.0.0.1:4177
+```
+
+A single-file, dependency-free visualization of the entire memory: your
+leaves as an organic particle brain (deterministic layout, Louvain community
+patches, EXTRACTED pathways arcing over the shell), plus a network view.
+No CDN, no network calls — the brain never leaves your machine. Community
+detection is dependency-free Louvain over the memory graph; communities that
+cross branch boundaries are flagged ⚡ because they are the real signal that
+two branches are secretly one topic.
+
+---
+
+## The name
+
+> **"The past is never dead. It's not even past."** — Faulkner
+
+**Urðr** (pronounced *urth*) is the Norse Norn of the past, who dwells at
+the root of Yggdrasil and waters the world-tree from the well of what has
+been. A fitting name for a memory: roots, branches, leaves — and nothing
+truly forgotten unless you choose to forget it.
 
 ## Why Urðr?
 
