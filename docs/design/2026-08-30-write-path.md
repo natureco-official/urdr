@@ -37,6 +37,11 @@ removed, then asked "where does this belong?".
 
 Best shortlist recall: top-5 = 56.9%. Root-file accuracy: top-1 37.6%.
 
+**Independent field replication (same bench, different machine/tree):** a
+1,251-leaf / 142-branch production tree measured top-1 29.9%, top-3 48.3%,
+top-5 55.2%, root top-1 43.8% — slightly better top-1 at scale, still
+nowhere near the auto-write bar. The rejection holds at 10× tree size.
+
 **Why it fails:** the destination is determined by leaf *type* × topic, not
 topic alone. A decision about project X shares its vocabulary with the
 project's topic branch, but belongs in the decision log. Bag-of-words sees

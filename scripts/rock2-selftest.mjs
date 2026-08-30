@@ -176,6 +176,19 @@ test('new-root uses the next dynamic number, valid naming language, moves branch
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Windows'ta PATH'teki bash WSL-interop başlatıcısı olabilir: Windows yolları
+// (betik + --path argümanları) çevrilmeden gider ve "C:Users..." diye kırılır.
+// CI'daki Git Bash etkilenmez (uname MINGW döner). Saha raporu: OpenClaw/WSL2.
+const bashProbe = process.platform === 'win32'
+  ? spawnSync('bash', ['-c', 'uname -r'], { encoding: 'utf8' })
+  : null;
+const WSL_INTEROP_BASH = Boolean(bashProbe && /microsoft|wsl/i.test(bashProbe.stdout || ''));
+function skipOnWslBash(label) {
+  if (!WSL_INTEROP_BASH) return false;
+  console.log(`  ↷ ${label}: atlandı — PATH'teki bash WSL; Windows yolları çevrilmiyor. Testi WSL İÇİNDEN (git clone + bash) veya Git Bash ile çalıştırın.`);
+  return true;
+}
+
 function init(args, cwd) {
   return spawnSync('bash', [path.join(here, 'init.sh'), ...args], {
     cwd,
@@ -185,6 +198,7 @@ function init(args, cwd) {
 }
 
 test('init uses documented defaults when stdin is closed and only path/lang are supplied', () => {
+  if (skipOnWslBash('init uses documented defaults when stdin is closed and only path/lang are supplied')) return;
   const dir = temp('init-non-interactive');
   const target = path.join(dir, 'memory');
   const result = init(['--path', target, '--lang', 'en'], dir);
@@ -206,6 +220,7 @@ test('init uses documented defaults when stdin is closed and only path/lang are 
 });
 
 test('init rejects invalid and removed both language modes without creating a target', () => {
+  if (skipOnWslBash('init rejects invalid and removed both language modes without creating a target')) return;
   const dir = temp('init-lang');
   for (const lang of ['both', 'xx']) {
     const target = path.join(dir, lang);
@@ -217,6 +232,7 @@ test('init rejects invalid and removed both language modes without creating a ta
 });
 
 test('init safely substitutes special characters and refuses overwrite', () => {
+  if (skipOnWslBash('init safely substitutes special characters and refuses overwrite')) return;
   const dir = temp('init-special');
   const target = path.join(dir, 'memory');
   const agent = 'A&B / \\ $ [agent]';
@@ -239,6 +255,7 @@ test('init safely substitutes special characters and refuses overwrite', () => {
 });
 
 test('init detects an enclosing git repository before writing', () => {
+  if (skipOnWslBash('init detects an enclosing git repository before writing')) return;
   const dir = temp('init-nested');
   const repo = path.join(dir, 'repo');
   fs.mkdirSync(repo);

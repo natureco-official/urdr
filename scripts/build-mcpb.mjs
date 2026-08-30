@@ -55,7 +55,10 @@ fs.writeFileSync(path.join(STAGE, 'server', 'package.json'), JSON.stringify({
   name: pkg.name, version: pkg.version, type: 'module', private: true,
   dependencies: pkg.dependencies,
 }, null, 2));
-runTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
+// --ignore-scripts: sahne kurulumunda yaşam-döngüsü betiği çalışmaz — SDK saf
+// JS'tir, gerek yok; kullanıcı .npmrc'sindeki allow-scripts politikaları da
+// (saha raporu: OpenClaw) kurulumu kesemez. Tedarik zinciri hijyeni bonus.
+runTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], {
   cwd: path.join(STAGE, 'server'), stdio: 'inherit',
 });
 
