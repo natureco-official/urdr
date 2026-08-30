@@ -16,6 +16,8 @@ import {
   buildPack, computeStamp, estimateTokens, loadPack, PACK_RELATIVE_DIR,
   readLeavesById, relatedLeaves, treeMap, writePack,
 } from './lib/context-pack.mjs';
+import { askMemory, pathBetween } from './lib/memory-query.mjs';
+import { buildReport, detectCommunities } from './lib/graph-intel.mjs';
 
 function fail(message) { console.error(message); process.exit(2); }
 
@@ -62,7 +64,19 @@ if (isMain()) {
       budgetTokens: parseInt(valueAfter('--budget'), 10) || undefined,
       depth: parseInt(valueAfter('--depth'), 10) || undefined,
     }), null, 2));
+  } else if (command === 'ask') {
+    if (positional.length === 0) fail('usage: pack.mjs ask "<soru>" --root <dir> [--budget N]');
+    const sonuc = askMemory(memoryDir, positional.join(' '), { budgetTokens: parseInt(valueAfter('--budget'), 10) || undefined });
+    console.log(sonuc.markdown);
+  } else if (command === 'path') {
+    if (positional.length !== 2) fail('usage: pack.mjs path "<A>" "<B>" --root <dir>');
+    const sonuc = pathBetween(memoryDir, positional[0], positional[1]);
+    if (sonuc.error) fail(sonuc.error);
+    console.log(sonuc.path.map((step, i) => `${i === 0 ? '●' : '→'} ${step.headline}${step.via ? `  _(${step.tier}/${step.via})_` : ''}`).join('\n'));
+  } else if (command === 'report') {
+    const pack = loadPack(memoryDir);
+    console.log(buildReport(pack, detectCommunities(pack)));
   } else {
-    fail('usage: pack.mjs <build|status|digest|map|read|related> [args]');
+    fail('usage: pack.mjs <build|status|digest|map|read|related|ask|path|report> [args]');
   }
 }

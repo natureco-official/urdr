@@ -67,13 +67,16 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
     assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
     'urdr_append',
     'urdr_apply_plan',
+    'urdr_ask',
     'urdr_compile_plan',
     'urdr_context',
     'urdr_forget_leaf',
     'urdr_lint',
     'urdr_map',
+    'urdr_path',
     'urdr_read',
     'urdr_related',
+    'urdr_report',
     'urdr_resume_forgetting',
     'urdr_search',
   ]);

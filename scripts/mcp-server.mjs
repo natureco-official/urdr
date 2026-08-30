@@ -11,6 +11,8 @@ import { forgetMemoryLeaf, resumeForgottenArtifactScrubs } from './lib/forgettin
 import { lintTree } from './lint.mjs';
 import { searchMemory } from './search.mjs';
 import { estimateTokens, loadPack, readLeavesById, relatedLeaves, treeMap } from './lib/context-pack.mjs';
+import { askMemory, pathBetween } from './lib/memory-query.mjs';
+import { buildReport, detectCommunities } from './lib/graph-intel.mjs';
 
 export const MAX_QUERY_LENGTH = 4096;
 export const MAX_LEAF_TEXT_LENGTH = 64 * 1024;
@@ -78,6 +80,41 @@ export const TOOL_DEFINITIONS = Object.freeze([
         budgetTokens: { type: 'integer', minimum: 50, maximum: 4000 },
         depth: { type: 'integer', minimum: 1, maximum: 3 },
       },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_ask',
+    description: 'ONE-CALL question answering: search seeds the memory graph, the neighborhood expands it, and a token-budgeted markdown answer comes back with full leaf texts, related headlines, and provenance tiers on every line. No LLM, fully deterministic.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['question'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        question: stringSchema('Natural-language question or keywords.', MAX_QUERY_LENGTH),
+        budgetTokens: { type: 'integer', minimum: 100, maximum: 4000 },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_path',
+    description: 'Cheapest evidence chain between two concepts (Dijkstra; explicit EXTRACTED references cost less than INFERRED adjacency). Accepts leaf ids or search queries; every hop carries its via/tier.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['from', 'to'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        from: stringSchema('Start: leaf id or search query.', MAX_QUERY_LENGTH),
+        to: stringSchema('End: leaf id or search query.', MAX_QUERY_LENGTH),
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_report',
+    description: 'Deterministic whole-tree structure report: god nodes, communities crossing branch boundaries (Louvain), surprising cross-root connections. Same tree yields the same report.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -272,6 +309,21 @@ function executeTool(serveRoot, name, rawArguments) {
       budgetTokens: optionalInteger(args, 'budgetTokens', 50, 4000),
       depth: optionalInteger(args, 'depth', 1, 3),
     });
+  }
+
+  if (name === 'urdr_ask') {
+    const question = requiredString(args, 'question', MAX_QUERY_LENGTH);
+    return askMemory(memory, question, { budgetTokens: optionalInteger(args, 'budgetTokens', 100, 4000) });
+  }
+
+  if (name === 'urdr_path') {
+    return pathBetween(memory, requiredString(args, 'from', MAX_QUERY_LENGTH), requiredString(args, 'to', MAX_QUERY_LENGTH));
+  }
+
+  if (name === 'urdr_report') {
+    const pack = loadPack(memory);
+    const assignment = detectCommunities(pack);
+    return { report: buildReport(pack, assignment), stamp: pack.stamp };
   }
 
   if (name === 'urdr_append') {

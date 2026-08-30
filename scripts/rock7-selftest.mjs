@@ -27,6 +27,8 @@ import { forgetMemoryLeaf } from './lib/forgetting.mjs';
 import { listRootFiles } from './lib/markdown-model.mjs';
 import { searchMemory } from './search.mjs';
 import { buildTreeData, layoutGraph } from './tree.mjs';
+import { askMemory, pathBetween } from './lib/memory-query.mjs';
+import { buildReport } from './lib/graph-intel.mjs';
 
 let passed = 0;
 function ok(condition, label) {
@@ -162,6 +164,29 @@ function makeTree() {
   ok(got.slice(0, wanted.length).every((row) => row.text && !row.error), 'read: kararlı id\'ler tam metin döndürür');
   ok(Boolean(got.at(-1).error), 'read: bilinmeyen id hata alanıyla işaretlenir');
   fs.rmSync(dir2, { recursive: true, force: true });
+}
+
+// ── 9: ask / path / report ─────────────────────────────────────────────────
+{
+  const dir = makeTree();
+  const cevap = askMemory(dir, 'PayTR canlıya alındı mı acaba', { budgetTokens: 400 });
+  ok(cevap.seeds.length > 0, 'ask: gevşetme merdiveniyle tohum bulunur');
+  ok(/PayTR canlıya alındı/.test(cevap.markdown), 'ask: cevap yaprağın tam metnini içerir');
+  ok(cevap.tokensApprox <= 400, 'ask: bütçe aşılmaz');
+  const bos = askMemory(dir, 'zzz-hicbir-yerde-yok-qqq', {});
+  ok(bos.seeds.length === 0 && /kaydedilmemiş/.test(bos.markdown), 'ask: bilinmeyen konuda uydurma yok');
+
+  const yol = pathBetween(dir, 'PayTR', 'apm_ anahtar');
+  ok(!yol.error && yol.path.length >= 2, 'path: iki kavram arası zincir bulunur');
+  ok(yol.path.some((step) => step.via === 'bkz'), 'path: zincir açık bkz adımından geçer');
+  const ayni = pathBetween(dir, 'PayTR', 'PayTR');
+  ok(ayni.path.length === 1, 'path: aynı yaprak tek adım döner');
+
+  const pack = loadPack(dir);
+  const rapor = buildReport(pack, (await import('./lib/graph-intel.mjs')).detectCommunities(pack));
+  ok(rapor.includes('URDR'), 'report: üretiliyor');
+  ok(buildReport(pack, (await import('./lib/graph-intel.mjs')).detectCommunities(pack)) === rapor, 'report: deterministik');
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n  ${passed} Rock 7 tests passed`);
