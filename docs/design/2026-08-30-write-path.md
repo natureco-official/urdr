@@ -1,6 +1,6 @@
 # Write Path — Design (v1.4)
 
-**Status:** draft — the measurement below reshaped the original idea
+**Status:** shipped in v1.4.0 (urdr_write_context + append hardening + write-bench, Rock 11) — the measurement below reshaped the original idea
 **Prior art:** Context Pack (read path), Context Tax layer (session-long reads)
 
 ## The problem
@@ -61,8 +61,8 @@ trial-and-error:
 - **Exact destination inventory** — every root file with its purpose line
   (from the template header) and its branch names *verbatim* (the #1 failure
   killer: no more guessed branch names).
-- **Near-duplicate warnings** — trigram similarity of the draft against
-  existing leaves (reusing the lint's duplication machinery); each warning
+- **Near-duplicate warnings** — token-set Jaccard of the draft against
+  existing leaves (the lint's own duplication measure and threshold); each warning
   carries the existing leaf id so the agent can extend instead of duplicate.
 - **Format hint** — the target-root leaf format from template comments
   (`<!-- Format: ... -->`), plus `edge:`/`bkz:` syntax reminder.
@@ -83,8 +83,8 @@ answer `unchanged`, oversized replies park in the spool.
   + edit-distance over the file's real branch names, ties lexicographic).
   This alone would have converted both observed real-world failures into
   immediate self-corrections.
-- **`dupeGuard: true`** (opt-in) — refuses the append when trigram
-  similarity with an existing leaf exceeds the lint threshold, returning
+- **`dupeGuard: true`** (opt-in) — refuses the append when token-Jaccard
+  similarity with an existing leaf exceeds the lint threshold (0.85), returning
   that leaf's id instead. Zero information loss: the caller decides to
   force, extend, or drop.
 
@@ -125,7 +125,7 @@ elimination of the failure and duplicate paths, which are the expensive ones
 
 - The advisory ranking is topic-blind-to-type by construction; its measured
   numbers ship with it. It is a spotlight, not a judge.
-- Near-duplicate detection inherits the lint's trigram thresholds — fuzzy
+- Near-duplicate detection inherits the lint's token-Jaccard thresholds — fuzzy
   paraphrases below the threshold pass silently.
 - write_context adds one tool call on trees small enough that `urdr_map`
   plus luck was often sufficient; the payoff grows with tree size and with
