@@ -22,6 +22,17 @@
 
 ---
 
+### Claude Desktop — one-click install (.mcpb)
+
+Download `urdr-memory-<version>.mcpb` from Releases and **double-click it**.
+Claude Desktop asks for your memory folder (pick an empty one to start
+fresh — templates ship inside the bundle) and runs the server with its own
+Node runtime. No npm, no terminal, no config file.
+
+Build it yourself: `npm run mcpb` → `dist/urdr-memory-<version>.mcpb`
+(validated and packed with the official `@anthropic-ai/mcpb` tooling;
+the bundle is fully self-contained).
+
 ## Context Pack — 93–227× fewer tokens, measured
 
 Agents used to re-orient from raw Markdown every session: the 4-file session

@@ -1,3 +1,4 @@
 önce oku github.txt
 node_modules/
 *.tgz
+dist/
