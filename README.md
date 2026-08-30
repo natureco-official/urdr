@@ -23,7 +23,7 @@ npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
 Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **183 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **191 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
