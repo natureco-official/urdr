@@ -10,6 +10,7 @@ import { applyCompilerPlan, compileDryRun } from './compiler.mjs';
 import { forgetMemoryLeaf, resumeForgottenArtifactScrubs } from './lib/forgetting.mjs';
 import { lintTree } from './lint.mjs';
 import { searchMemory } from './search.mjs';
+import { estimateTokens, loadPack, readLeavesById, relatedLeaves, treeMap } from './lib/context-pack.mjs';
 
 export const MAX_QUERY_LENGTH = 4096;
 export const MAX_LEAF_TEXT_LENGTH = 64 * 1024;
@@ -32,6 +33,50 @@ export const TOOL_DEFINITIONS = Object.freeze([
         maxResults: { type: 'integer', minimum: 0, maximum: 1000 },
         regexTimeoutMs: { type: 'integer', minimum: 10, maximum: 10000 },
         hierarchyFiles: { type: 'array', maxItems: 64, items: stringSchema('Relative root filename inside memoryDir.', 255) },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_context',
+    description: 'ONE-CALL SESSION START. Compiled ~350-token brief of the whole tree: map, recent dated entries with leaf ids, hottest nodes, growth warnings. Replaces reading root files at session start.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_map',
+    description: 'Tree skeleton only: roots, branches, leaf counts (~80 tokens). Use to route before searching; never read whole root files for orientation.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { memoryDir: memoryDirSchema },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_read',
+    description: 'Full text of specific leaves by stable id (from urdr_search / urdr_context / urdr_related). Surgical read — only the requested leaves are returned, never whole files.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['ids'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        ids: { type: 'array', minItems: 1, maxItems: 32, items: stringSchema('Stable leaf id.', 512) },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_related',
+    description: 'Token-budgeted neighborhood of one leaf over the memory graph. EXTRACTED edges (explicit edge:/bkz:) rank before INFERRED (same-branch adjacency); every result carries its provenance tier.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['leafId'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        leafId: stringSchema('Origin leaf id.', 512),
+        budgetTokens: { type: 'integer', minimum: 50, maximum: 4000 },
+        depth: { type: 'integer', minimum: 1, maximum: 3 },
       },
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -200,6 +245,32 @@ function executeTool(serveRoot, name, rawArguments) {
       maxResults: optionalInteger(args, 'maxResults', 0, 1000),
       regexTimeoutMs: optionalInteger(args, 'regexTimeoutMs', 10, 10000),
       hierarchyFiles,
+    });
+  }
+
+  if (name === 'urdr_context') {
+    const pack = loadPack(memory);
+    return { digest: pack.digest, tokensApprox: estimateTokens(pack.digest), stamp: pack.stamp, rebuilt: pack.rebuilt };
+  }
+
+  if (name === 'urdr_map') {
+    const pack = loadPack(memory);
+    return { map: treeMap(pack), stamp: pack.stamp };
+  }
+
+  if (name === 'urdr_read') {
+    const ids = args.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 32) throw new Error('ids must contain 1..32 leaf ids');
+    for (const id of ids) requiredString({ id }, 'id', 512);
+    return { leaves: readLeavesById(memory, ids) };
+  }
+
+  if (name === 'urdr_related') {
+    const leafId = requiredString(args, 'leafId', 512);
+    const pack = loadPack(memory);
+    return relatedLeaves(pack, leafId, {
+      budgetTokens: optionalInteger(args, 'budgetTokens', 50, 4000),
+      depth: optionalInteger(args, 'depth', 1, 3),
     });
   }
 

@@ -65,9 +65,18 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
   try {
     const listed = await client.listTools();
     assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-      'urdr_append', 'urdr_apply_plan', 'urdr_compile_plan', 'urdr_forget_leaf',
-      'urdr_lint', 'urdr_resume_forgetting', 'urdr_search',
-    ]);
+    'urdr_append',
+    'urdr_apply_plan',
+    'urdr_compile_plan',
+    'urdr_context',
+    'urdr_forget_leaf',
+    'urdr_lint',
+    'urdr_map',
+    'urdr_read',
+    'urdr_related',
+    'urdr_resume_forgetting',
+    'urdr_search',
+  ]);
     assert.match(listed.tools.find((tool) => tool.name === 'urdr_forget_leaf').description, /CONSEQUENTIAL USER-TRIGGERED ERASURE/);
     assert.equal(listed.tools.find((tool) => tool.name === 'urdr_compile_plan').annotations.readOnlyHint, true);
     assert.deepEqual(listed.tools.find((tool) => tool.name === 'urdr_apply_plan').annotations,
