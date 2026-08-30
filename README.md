@@ -23,7 +23,7 @@ npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
 Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **183 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **212 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
@@ -70,6 +70,40 @@ New MCP tools: `urdr_context` (one-call session start), `urdr_map`
 (~80-token skeleton), `urdr_read` (full text of specific leaf ids),
 `urdr_related` (token-budgeted graph neighborhood; every result labeled
 EXTRACTED — explicit `edge:`/`bkz:` — or INFERRED — same-branch adjacency).
+
+## Context Tax — the session-long half of the savings
+
+The Context Pack made session *start* cheap. The context-tax layer (v1.2)
+attacks the rest: every token that enters an agent's context is re-read on
+every later request of the session (measured with
+`scripts/token-autopsy.mjs`: 2.3M tool tokens became 10.7 **billion**
+cache-read tokens across six real sessions). Two mechanisms, both with
+zero information loss:
+
+- **Delta protocol** — a repeated identical read-only query returns a
+  ~30-token `unchanged` proof (content-hash stamp + spool ref) instead of
+  the full body. A changed tree always returns the full body; `force:true`
+  always works; the ledger lives only in server memory, so a restart just
+  means one full reply again.
+- **Spool** — oversized replies are never truncated. The full body is
+  parked in a content-addressed file under `.urdr/spool/`, the reply
+  carries a preview plus `spool:<hash>`, and `urdr_fetch(ref, fromLine,
+  toLine)` returns exact, integrity-checked slices. The spool is a cache:
+  LRU-capped, and **emptied by the forgetting scrub in the same choke
+  point as the pack** — a forgotten leaf cannot survive inside a parked
+  reply.
+
+- **File watch / delta (v1.3)** — the stamps extend beyond the memory
+  tree: `urdr_watch(paths)` baselines any text files under the fixed watch
+  root (`--watch-root`, defaults to the memory root), and `urdr_delta()`
+  answers *"what changed since I last looked?"* for tokens proportional to
+  the **change**, not the codebase — unchanged files cost one line, changed
+  files return only their changed line ranges as verbatim hunks (an
+  over-budget diff region comes back whole, flagged `coarse:true`, never
+  summarized). Baselines rebase after each report; the registry is
+  session-lived, so no staleness class exists.
+
+Design and measured baseline: `docs/design/2026-08-30-context-tax.md`.
 
 ## Urðr Tree — see your whole brain locally
 
