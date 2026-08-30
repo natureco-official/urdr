@@ -31,6 +31,22 @@ When you have an Urðr memory tree, you are expected to:
 
 ### Session Start Protocol
 
+**MCP available (preferred — ~350 tokens instead of ~35,000):**
+
+```
+1. Call urdr_context           → compiled brief: tree map, recent entries
+                                  with leaf ids, hottest nodes, warnings
+2. Read agent-personality.md   → adopt the persona (only file you read)
+```
+
+That single call replaces reading root files at session start. Deep dives
+go through `urdr_search` → `urdr_read <leaf-id>` (surgical, full text of
+just those leaves) and `urdr_related <leaf-id>` (token-budgeted neighborhood).
+Never load a whole root file for orientation again; `urdr_map` gives the
+skeleton for ~80 tokens when routing.
+
+**No MCP (fallback — plain file protocol):**
+
 ```
 1. Read root-0 (index) → understand what's where
 2. Read root-3 (decisions) → check for pending items

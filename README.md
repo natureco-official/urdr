@@ -22,6 +22,45 @@
 
 ---
 
+## Context Pack — 93–227× fewer tokens, measured
+
+Agents used to re-orient from raw Markdown every session: the 4-file session
+protocol costs ~35k tokens on a mature tree, and every "hierarchy-first"
+lookup loads a whole root file. The Context Pack compiles the tree into
+`.urdr/pack/` (catalog + graph + a ≤~375-token session brief) —
+deterministically, with **zero LLM calls and zero dependencies**, stamped
+against the root files and event log so a stale pack is impossible.
+
+| tree size | session: old → new | factor | lookup: old → new | factor |
+|---|---|---|---|---|
+| 1,120 leaves | 34,737 → **375** | **93×** | 14,967 → 576 | 26× |
+| 4,500 leaves | 53,216 → **375** | **142×** | 24,261 → 576 | 42× |
+| 9,000 leaves | 85,236 → **375** | **227×** | 40,370 → 576 | 70× |
+
+The brief is **O(1)**: the tree grew 8× and the session cost did not move.
+Numbers are `chars/4` estimates from `node scripts/context-bench.mjs`
+(seeded synthetic trees; the bench prints its own honesty notes — leaves are
+~2 lines, so real long-leaf trees make the OLD side worse, not better).
+
+New MCP tools: `urdr_context` (one-call session start), `urdr_map`
+(~80-token skeleton), `urdr_read` (full text of specific leaf ids),
+`urdr_related` (token-budgeted graph neighborhood; every result labeled
+EXTRACTED — explicit `edge:`/`bkz:` — or INFERRED — same-branch adjacency).
+
+## Urðr Tree — see your whole brain locally
+
+```
+node scripts/tree.mjs ~/my-memory --serve     # → http://127.0.0.1:4177
+```
+
+A single-file, dependency-free visualization of the entire memory: your
+leaves as an organic particle brain (deterministic layout, Louvain community
+patches, EXTRACTED pathways arcing over the shell), plus a network view.
+No CDN, no network calls — the brain never leaves your machine. Community
+detection is dependency-free Louvain over the memory graph; communities that
+cross branch boundaries are flagged ⚡ because they are the real signal that
+two branches are secretly one topic.
+
 ## Why Urðr?
 
 Every AI agent today has the same fundamental limitation: **no persistent memory between sessions**. Most agents start fresh each time, losing context, decisions, and lessons learned. The ones that do remember use flat files that quickly become unmanageable junk drawers.
