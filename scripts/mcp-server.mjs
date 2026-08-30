@@ -14,6 +14,7 @@ import { estimateTokens, loadPack, readLeavesById, relatedLeaves, treeMap } from
 import { askMemory, pathBetween } from './lib/memory-query.mjs';
 import { buildReport, detectCommunities } from './lib/graph-intel.mjs';
 import { applyContextTax, createSessionLedger, spoolFetch } from './lib/context-tax.mjs';
+import { createWatchRegistry, deltaPaths, watchPaths, MAX_WATCH_PATHS_PER_CALL, MAX_WATCH_FILES } from './lib/file-watch.mjs';
 
 export const MAX_QUERY_LENGTH = 4096;
 export const MAX_LEAF_TEXT_LENGTH = 64 * 1024;
@@ -187,6 +188,32 @@ export const TOOL_DEFINITIONS = Object.freeze([
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   {
+    name: 'urdr_watch',
+    description: 'Register file stamps for change tracking (the coding-loop counterpart of the memory stamps). Paths are relative to the fixed watch root configured at server startup (--watch-root, defaults to the memory root); re-watching a path rebases its baseline. Registry is session-lived: a server restart forgets baselines, so no staleness class exists.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['paths'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        paths: { type: 'array', minItems: 1, maxItems: 64, items: stringSchema('Relative path beneath the watch root.', 1024) },
+        maxReplyTokens: taxProps.maxReplyTokens,
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'urdr_delta',
+    description: 'What changed since the last look? Unchanged watched files cost one line each; changed files return only their changed line ranges as verbatim hunks (never summaries — an over-budget diff region is returned whole and flagged coarse:true). Baselines rebase after reporting, so consecutive deltas are incremental. Oversized replies park in the spool.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        memoryDir: memoryDirSchema,
+        paths: { type: 'array', minItems: 1, maxItems: 256, items: stringSchema('Watched relative path (subset filter; omit for all).', 1024) },
+        maxReplyTokens: taxProps.maxReplyTokens,
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'urdr_fetch',
     description: 'Retrieve exact line slices of a parked reply from the spool. Refs (spool:<hash>) come from "unchanged" or "spooled" replies; the ref is the content hash, so every slice is provably part of the reply it came from. The spool is a cache: swept by LRU and emptied by the forgetting scrub.',
     inputSchema: {
@@ -290,14 +317,14 @@ function errorResult(error) {
   return { isError: true, content: [{ type: 'text', text: message }], structuredContent: { error: message } };
 }
 
-export function executeTool(serveRoot, name, rawArguments, ledger = null) {
+export function executeTool(serveRoot, name, rawArguments, ledger = null, watch = null) {
   const args = objectArguments(rawArguments);
   const memory = resolveServedMemoryDir(serveRoot, args.memoryDir ?? '.');
-  const value = dispatchTool(memory, name, args);
+  const value = dispatchTool(memory, name, args, watch);
   return applyContextTax(ledger, memory, name, args, value);
 }
 
-function dispatchTool(memory, name, args) {
+function dispatchTool(memory, name, args, watch) {
 
   if (name === 'urdr_search') {
     const query = requiredString(args, 'query', MAX_QUERY_LENGTH);
@@ -386,6 +413,17 @@ function dispatchTool(memory, name, args) {
 
   if (name === 'urdr_resume_forgetting') return resumeForgottenArtifactScrubs(memory);
 
+  if (name === 'urdr_watch' || name === 'urdr_delta') {
+    if (!watch) throw new Error(`${name} requires a watch registry (available over the MCP server; not in bare CLI calls)`);
+    const paths = args.paths;
+    if (paths !== undefined) {
+      if (!Array.isArray(paths)) throw new Error('paths must be an array of relative paths');
+      for (const entry of paths) requiredString({ entry }, 'entry', 1024);
+    }
+    if (name === 'urdr_watch') return watchPaths(watch.registry, watch.root, paths);
+    return deltaPaths(watch.registry, watch.root, paths);
+  }
+
   if (name === 'urdr_fetch') {
     return spoolFetch(memory, requiredString(args, 'ref', 64), {
       fromLine: optionalInteger(args, 'fromLine', 1, 1000000),
@@ -396,17 +434,20 @@ function dispatchTool(memory, name, args) {
   throw new Error(`unknown tool: ${name}`);
 }
 
-export function createUrdrMcpServer({ serveRoot }) {
+export function createUrdrMcpServer({ serveRoot, watchRoot }) {
   const confinedRoot = fs.realpathSync(path.resolve(serveRoot));
   if (!fs.statSync(confinedRoot).isDirectory()) throw new Error('configured server root must be a directory');
   const ledger = createSessionLedger();   // oturum-ömürlü delta defteri
-  const server = new Server({ name: 'urdr-mcp-server', version: '1.2.0' }, {
+  const watchRootResolved = fs.realpathSync(path.resolve(watchRoot ?? confinedRoot));
+  if (!fs.statSync(watchRootResolved).isDirectory()) throw new Error('watch root must be a directory');
+  const watch = { registry: createWatchRegistry(), root: watchRootResolved };
+  const server = new Server({ name: 'urdr-mcp-server', version: '1.3.0' }, {
     capabilities: { tools: {} },
     instructions: `All memoryDir values are relative to the fixed configured root: ${confinedRoot}`,
   });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    try { return result(executeTool(confinedRoot, request.params.name, request.params.arguments, ledger)); }
+    try { return result(executeTool(confinedRoot, request.params.name, request.params.arguments, ledger, watch)); }
     catch (error) { return errorResult(error); }
   });
   return server;
@@ -414,17 +455,22 @@ export function createUrdrMcpServer({ serveRoot }) {
 
 function parseCli(argv) {
   if (argv.includes('--help')) return { help: true };
-  const unknown = argv.filter((arg, index) => arg !== '--root' && argv[index - 1] !== '--root');
+  const flags = ['--root', '--watch-root'];
+  const unknown = argv.filter((arg, index) => !flags.includes(arg) && !flags.includes(argv[index - 1]));
   if (unknown.length) throw new Error(`unknown option: ${unknown[0]}`);
-  const rootIndex = argv.indexOf('--root');
-  if (rootIndex >= 0 && !argv[rootIndex + 1]) throw new Error('--root requires a directory');
-  return { serveRoot: rootIndex >= 0 ? argv[rootIndex + 1] : process.cwd() };
+  const valueOf = (flag) => {
+    const index = argv.indexOf(flag);
+    if (index < 0) return undefined;
+    if (!argv[index + 1]) throw new Error(`${flag} requires a directory`);
+    return argv[index + 1];
+  };
+  return { serveRoot: valueOf('--root') ?? process.cwd(), watchRoot: valueOf('--watch-root') };
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseCli(argv);
   if (options.help) {
-    process.stdout.write('Usage: urdr-mcp [--root <confined-memory-root>]\n');
+    process.stdout.write('Usage: urdr-mcp [--root <confined-memory-root>] [--watch-root <confined-watch-root>]\n');
     return;
   }
   const server = createUrdrMcpServer(options);

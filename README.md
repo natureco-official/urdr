@@ -23,7 +23,7 @@ npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
 Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **202 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **212 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
@@ -92,6 +92,16 @@ zero information loss:
   LRU-capped, and **emptied by the forgetting scrub in the same choke
   point as the pack** — a forgotten leaf cannot survive inside a parked
   reply.
+
+- **File watch / delta (v1.3)** — the stamps extend beyond the memory
+  tree: `urdr_watch(paths)` baselines any text files under the fixed watch
+  root (`--watch-root`, defaults to the memory root), and `urdr_delta()`
+  answers *"what changed since I last looked?"* for tokens proportional to
+  the **change**, not the codebase — unchanged files cost one line, changed
+  files return only their changed line ranges as verbatim hunks (an
+  over-budget diff region comes back whole, flagged `coarse:true`, never
+  summarized). Baselines rebase after each report; the registry is
+  session-lived, so no staleness class exists.
 
 Design and measured baseline: `docs/design/2026-08-30-context-tax.md`.
 

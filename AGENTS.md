@@ -56,6 +56,9 @@ whole in the spool and you page through them with `urdr_fetch(ref,
 fromLine, toLine)`. Route your own large command outputs to files too;
 bring only the tail plus a path into context — and record decisions as
 leaves so the next session asks `urdr_ask` instead of re-exploring.
+While coding, `urdr_watch` the files you are working on once, then ask
+`urdr_delta` instead of re-reading them: unchanged files cost one line,
+changed files return only their changed line ranges, verbatim.
 
 **No MCP (fallback — plain file protocol):**
 

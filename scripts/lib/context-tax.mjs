@@ -38,6 +38,11 @@ export const DELTA_TOOLS = new Set([
   'urdr_related', 'urdr_ask', 'urdr_path', 'urdr_report',
 ]);
 
+/** Park (spool taşması) uygulanan araçlar: delta kümesi + durum bildiren
+ * watch/delta. urdr_fetch bilinçli dışarıda — geri-alma kanalının kendisi
+ * park edilirse sonsuz döngü doğar; dilim boyunu zaten çağıran sınırlar. */
+export const PARKED_TOOLS = new Set([...DELTA_TOOLS, 'urdr_watch', 'urdr_delta']);
+
 export function createSessionLedger() { return new Map(); }
 
 const sha256 = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
@@ -147,7 +152,8 @@ function readMaxReplyTokens(args) {
  * çağrının "değişmedi" tespitini bozmaz.
  */
 export function applyContextTax(ledger, memoryDir, name, args, value) {
-  if (!ledger || !DELTA_TOOLS.has(name)) return value;
+  if (!ledger || !PARKED_TOOLS.has(name)) return value;
+  const deltaEligible = DELTA_TOOLS.has(name);
   const force = readForce(args);
   const maxReplyTokens = readMaxReplyTokens(args);
   const text = JSON.stringify(value, null, 2);
@@ -159,7 +165,7 @@ export function applyContextTax(ledger, memoryDir, name, args, value) {
   const previous = ledger.get(key);
   ledger.set(key, stamp);
 
-  if (!force && previous === stamp) {
+  if (deltaEligible && !force && previous === stamp) {
     const ref = spoolWrite(memoryDir, text);
     return {
       unchanged: true, stamp, ref, tokensApproxFull: estimateTokens(text),

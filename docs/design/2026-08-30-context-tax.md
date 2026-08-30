@@ -1,6 +1,6 @@
 # Context Tax Layer — Design
 
-**Status:** draft, measured baseline in place · **Target:** v1.2.0
+**Status:** shipped — v1.2.0 (delta protocol + spool + urdr_fetch, Rock 9) and v1.3.0 (urdr_watch/urdr_delta, Rock 10)
 **Bench:** `node scripts/token-autopsy.mjs <transcript-dirs>` (proven by Rock 8)
 
 ## The problem, measured
