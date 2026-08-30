@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { appendLeaf } from './append.mjs';
 import {
   buildPack, DIGEST_CHAR_BUDGET, loadPack, PACK_RELATIVE_DIR, readLeavesById, relatedLeaves,
@@ -38,7 +39,7 @@ function ok(condition, label) {
 
 function makeTree() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'urdr-rock7-'));
-  const templates = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'templates');
+  const templates = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
   for (const name of ['root-0-index.md', 'root-1-topics.md', 'root-2-technical.md', 'root-3-decisions.md']) {
     fs.copyFileSync(path.join(templates, name), path.join(dir, name));
   }
