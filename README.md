@@ -312,12 +312,23 @@ traversal, and symlinks that resolve outside it are rejected.
 
 ```bash
 npx -y urdr-mcp-server --root ~/my-memory
+# optional: confine file watching to your project for urdr_watch / urdr_delta
+npx -y urdr-mcp-server --root ~/my-memory --watch-root ~/my-project
 # or, from a local checkout after npm ci:
 node scripts/mcp-server.mjs --root ~/my-memory
 ```
 
-The server exposes seven namespaced tools: `urdr_search`, `urdr_append`, `urdr_lint`,
-`urdr_compile_plan`, `urdr_apply_plan`, `urdr_forget_leaf`, and `urdr_resume_forgetting`.
+The server exposes **17 namespaced tools**:
+
+- **Read (delta-protocol + spool):** `urdr_context`, `urdr_map`, `urdr_read`, `urdr_related`,
+  `urdr_search`, `urdr_ask`, `urdr_path`, `urdr_report` — repeated identical queries answer
+  with a ~30-token hash-backed `unchanged` proof; oversized replies park in the spool.
+- **Context tax:** `urdr_fetch` (integrity-checked slices of parked replies), `urdr_watch` +
+  `urdr_delta` (file stamps under the confined watch root; changes come back as verbatim hunks,
+  cost proportional to the change).
+- **Write & maintain:** `urdr_append`, `urdr_lint`, `urdr_compile_plan`, `urdr_apply_plan`,
+  `urdr_forget_leaf`, `urdr_resume_forgetting`.
+
 Compiler planning is read-only; apply keeps the committed tree-state staleness check and accepts
 only actions reproduced by a fresh trusted dry run. Forgetting is marked and described as a
 consequential user-triggered erasure action, while resume is an idempotent completion of an already
