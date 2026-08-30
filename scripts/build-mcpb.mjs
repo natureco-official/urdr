@@ -29,12 +29,24 @@ const cleanNpmConfigArgs = () => {          // DIST aşağıda tanımlanır; ça
   fs.writeFileSync(globalRc, '');
   return ['--userconfig', userRc, '--globalconfig', globalRc];
 };
+// Windows'ta önce Node'un kendi npm/npx cli.js'i denenir (shell'siz —
+// DEP0190 uyarısı ve argüman-kaçış riski yok); bulunamazsa .cmd + shell
+// yedeği kalır. macOS/Linux'ta düz çağrı.
+const bundledNpmCli = (command) => {
+  const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', `${command}-cli.js`);
+  return fs.existsSync(cli) ? cli : null;
+};
 const runTool = (command, args, options = {}) => {
   const env = { ...process.env, ...options.env };
   for (const key of Object.keys(env)) {
     if (/^npm_config_allow[-_]scripts$/i.test(key)) delete env[key];
   }
-  return execFileSync(WIN ? `${command}.cmd` : command, args, { ...options, shell: WIN, env });
+  if (WIN) {
+    const cli = bundledNpmCli(command);
+    if (cli) return execFileSync(process.execPath, [cli, ...args], { ...options, env });
+    return execFileSync(`${command}.cmd`, args, { ...options, shell: true, env });
+  }
+  return execFileSync(command, args, { ...options, env });
 };
 import fs from 'node:fs';
 import path from 'node:path';
