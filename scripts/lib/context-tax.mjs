@@ -35,7 +35,7 @@ const REF_RE = /^spool:[0-9a-f]{16}$/;
  * "unchanged" ile kısaltılmaz. */
 export const DELTA_TOOLS = new Set([
   'urdr_search', 'urdr_context', 'urdr_map', 'urdr_read',
-  'urdr_related', 'urdr_ask', 'urdr_path', 'urdr_report',
+  'urdr_related', 'urdr_ask', 'urdr_path', 'urdr_report', 'urdr_write_context',
 ]);
 
 /** Park (spool taşması) uygulanan araçlar: delta kümesi + durum bildiren

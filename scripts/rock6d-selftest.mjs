@@ -82,6 +82,7 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
     'urdr_resume_forgetting',
     'urdr_search',
     'urdr_watch',
+    'urdr_write_context',
   ]);
     assert.match(listed.tools.find((tool) => tool.name === 'urdr_forget_leaf').description, /CONSEQUENTIAL USER-TRIGGERED ERASURE/);
     assert.equal(listed.tools.find((tool) => tool.name === 'urdr_compile_plan').annotations.readOnlyHint, true);

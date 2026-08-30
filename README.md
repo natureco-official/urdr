@@ -23,7 +23,7 @@ npx -y urdr-mcp-server --root ~/my-memory     # any MCP client, one line
 Claude Desktop users: grab the `.mcpb` from Releases and double-click it.
 
 **Proof, not promises:**
-- **212 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
+- **223 automated tests**, cross-platform CI on Linux, macOS, and Windows — badge above is live.
 - **0 known vulnerabilities** (`npm audit`).
 - Every atomic write is **fault-injection tested** at each real crash point — `before-fsync`, `before-rename`, `after-rename`, `before-directory-fsync` — proving a crash mid-write never corrupts or half-writes a leaf.
 - The benchmark **reports its own weak spots**: 89.7% one-call recall, dropping to 67% on collision/fuzzy keys — published, not hidden.
@@ -318,7 +318,7 @@ npx -y urdr-mcp-server --root ~/my-memory --watch-root ~/my-project
 node scripts/mcp-server.mjs --root ~/my-memory
 ```
 
-The server exposes **17 namespaced tools**:
+The server exposes **18 namespaced tools**:
 
 - **Read (delta-protocol + spool):** `urdr_context`, `urdr_map`, `urdr_read`, `urdr_related`,
   `urdr_search`, `urdr_ask`, `urdr_path`, `urdr_report` — repeated identical queries answer
@@ -326,6 +326,12 @@ The server exposes **17 namespaced tools**:
 - **Context tax:** `urdr_fetch` (integrity-checked slices of parked replies), `urdr_watch` +
   `urdr_delta` (file stamps under the confined watch root; changes come back as verbatim hunks,
   cost proportional to the change).
+- **Write path:** `urdr_write_context` — one pre-write call (~300 tokens): exact root/branch
+  inventory with purposes and verbatim names, near-duplicate warnings, format hints, and an
+  advisory-only ranking whose measured accuracy ships in the reply (the destination decision
+  stays with the agent — see `docs/design/2026-08-30-write-path.md` for why the measured
+  auto-resolver was rejected). `urdr_append` now recovers typo'd branch names with a
+  deterministic "did you mean" and takes `dupeGuard: true` to refuse near-duplicate leaves.
 - **Write & maintain:** `urdr_append`, `urdr_lint`, `urdr_compile_plan`, `urdr_apply_plan`,
   `urdr_forget_leaf`, `urdr_resume_forgetting`.
 

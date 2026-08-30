@@ -15,6 +15,7 @@ import { askMemory, pathBetween } from './lib/memory-query.mjs';
 import { buildReport, detectCommunities } from './lib/graph-intel.mjs';
 import { applyContextTax, createSessionLedger, spoolFetch } from './lib/context-tax.mjs';
 import { createWatchRegistry, deltaPaths, watchPaths, MAX_WATCH_PATHS_PER_CALL, MAX_WATCH_FILES } from './lib/file-watch.mjs';
+import { buildWriteContext, listRootInventory, nearDuplicates as findNearDuplicates, suggestBranches, DUPE_GUARD_THRESHOLD } from './lib/write-path.mjs';
 
 export const MAX_QUERY_LENGTH = 4096;
 export const MAX_LEAF_TEXT_LENGTH = 64 * 1024;
@@ -140,6 +141,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
         rootFile: stringSchema('Relative root filename inside memoryDir.', 255),
         branch: stringSchema('Existing ## branch name.', 512),
         leafText: stringSchema('Leaf Markdown. Actual headings are rejected.', MAX_LEAF_TEXT_LENGTH),
+        dupeGuard: { type: 'boolean', description: 'Refuse the append when a near-identical leaf already exists (token-Jaccard >= 0.85, same measure as the lint); the refusal returns the existing leaf ids so you can extend instead. Re-call without dupeGuard to force.' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -186,6 +188,19 @@ export const TOOL_DEFINITIONS = Object.freeze([
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'urdr_write_context',
+    description: 'ONE-CALL PRE-WRITE BRIEF (~300 tokens): exact root/branch inventory with purposes and verbatim branch names (kills guessed-name append failures), near-duplicate warnings against the draft (extend instead of duplicate), per-branch format hints, and an ADVISORY-ONLY lexical ranking whose measured accuracy ships in the reply (leave-one-out on a real tree: top-1 23.9%, top-5 56.9%) — the destination decision stays with you. Replaces map + root-file reads before urdr_append.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['draftText'],
+      properties: {
+        memoryDir: memoryDirSchema,
+        draftText: stringSchema('The leaf text you intend to append.', MAX_LEAF_TEXT_LENGTH),
+        ...taxProps,
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'urdr_watch',
@@ -386,8 +401,38 @@ function dispatchTool(memory, name, args, watch) {
   if (name === 'urdr_append') {
     const rootFile = requiredString(args, 'rootFile', 255);
     validateRootFile(memory, rootFile);
-    return appendLeaf(memory, rootFile, requiredString(args, 'branch', 512),
-      requiredString(args, 'leafText', MAX_LEAF_TEXT_LENGTH));
+    const branch = requiredString(args, 'branch', 512);
+    const leafText = requiredString(args, 'leafText', MAX_LEAF_TEXT_LENGTH);
+    if (optionalBoolean(args, 'dupeGuard')) {
+      const pack = loadPack(memory);
+      const texts = new Map();
+      for (let i = 0; i < pack.leaves.length; i += 32) {
+        for (const leaf of readLeavesById(memory, pack.leaves.slice(i, i + 32).map((l) => l.id))) {
+          if (!leaf.error) texts.set(leaf.id, leaf.text || '');
+        }
+      }
+      const duplicates = findNearDuplicates(pack, texts, leafText, { threshold: DUPE_GUARD_THRESHOLD });
+      if (duplicates.length > 0) {
+        return { refused: true, reason: 'near-duplicate leaf already exists', nearDuplicates: duplicates,
+          hint: 'extend the existing leaf (urdr_read the id) or re-call without dupeGuard to force' };
+      }
+    }
+    try {
+      return appendLeaf(memory, rootFile, branch, leafText);
+    } catch (error) {
+      if (/branch not found/i.test(error?.message || '')) {
+        const inventory = listRootInventory(memory).find((root) => root.file === rootFile);
+        const suggestions = suggestBranches((inventory?.branches || []).map((b) => b.name), branch);
+        if (suggestions.length > 0) {
+          throw new Error(`${error.message} — did you mean ${suggestions.map((sug) => `"${sug.name}"`).join(' or ')}? (branch names must match verbatim; urdr_write_context lists them)`);
+        }
+      }
+      throw error;
+    }
+  }
+
+  if (name === 'urdr_write_context') {
+    return buildWriteContext(memory, requiredString(args, 'draftText', MAX_LEAF_TEXT_LENGTH));
   }
 
   if (name === 'urdr_lint') {
@@ -441,7 +486,7 @@ export function createUrdrMcpServer({ serveRoot, watchRoot }) {
   const watchRootResolved = fs.realpathSync(path.resolve(watchRoot ?? confinedRoot));
   if (!fs.statSync(watchRootResolved).isDirectory()) throw new Error('watch root must be a directory');
   const watch = { registry: createWatchRegistry(), root: watchRootResolved };
-  const server = new Server({ name: 'urdr-mcp-server', version: '1.3.0' }, {
+  const server = new Server({ name: 'urdr-mcp-server', version: '1.4.0' }, {
     capabilities: { tools: {} },
     instructions: `All memoryDir values are relative to the fixed configured root: ${confinedRoot}`,
   });

@@ -59,6 +59,11 @@ leaves so the next session asks `urdr_ask` instead of re-exploring.
 While coding, `urdr_watch` the files you are working on once, then ask
 `urdr_delta` instead of re-reading them: unchanged files cost one line,
 changed files return only their changed line ranges, verbatim.
+Before appending, call `urdr_write_context(draft)` once instead of reading
+root files: it returns verbatim branch names (never guess them), warns if a
+near-identical leaf exists (extend it instead), and shows the branch's leaf
+format. Its ranking is advisory — the destination decision is yours. Use
+`dupeGuard: true` on `urdr_append` when unsure.
 
 **No MCP (fallback — plain file protocol):**
 
