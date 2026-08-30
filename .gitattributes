@@ -1,0 +1,3 @@
+# Kabuk betikleri her platformda LF kalmali — CRLF, WSL/Git Bash altinda init.sh gibi
+# betikleri "bad interpreter" ile kirar (saha raporu: Windows+WSL2 kurulumu).
+*.sh text eol=lf

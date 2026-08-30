@@ -12,6 +12,12 @@
  * Doğrulama ve paketleme resmi araçla yapılır: npx @anthropic-ai/mcpb.
  */
 import { execFileSync } from 'node:child_process';
+
+// Windows'ta npm/npx birer .cmd betiğidir: execFileSync düz adla ENOENT verir,
+// .cmd uzantısı da ancak shell ile çalışır. Tek boğaz — her platformda aynı çağrı.
+const WIN = process.platform === 'win32';
+const runTool = (command, args, options = {}) =>
+  execFileSync(WIN ? `${command}.cmd` : command, args, { ...options, shell: WIN });
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +55,7 @@ fs.writeFileSync(path.join(STAGE, 'server', 'package.json'), JSON.stringify({
   name: pkg.name, version: pkg.version, type: 'module', private: true,
   dependencies: pkg.dependencies,
 }, null, 2));
-execFileSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
+runTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
   cwd: path.join(STAGE, 'server'), stdio: 'inherit',
 });
 
@@ -110,10 +116,10 @@ const manifest = {
 fs.writeFileSync(path.join(STAGE, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
 // ── 4. doğrula + paketle ─────────────────────────────────────────────────────
-execFileSync('npx', ['-y', '@anthropic-ai/mcpb', 'validate', path.join(STAGE, 'manifest.json')], { stdio: 'inherit' });
+runTool('npx', ['-y', '@anthropic-ai/mcpb', 'validate', path.join(STAGE, 'manifest.json')], { stdio: 'inherit' });
 const out = path.join(DIST, `urdr-memory-${pkg.version}.mcpb`);
 fs.rmSync(out, { force: true });
-execFileSync('npx', ['-y', '@anthropic-ai/mcpb', 'pack', STAGE, out], { stdio: 'inherit' });
+runTool('npx', ['-y', '@anthropic-ai/mcpb', 'pack', STAGE, out], { stdio: 'inherit' });
 const size = fs.statSync(out).size;
 console.log(`\n✓ ${path.relative(ROOT, out)}  (${(size / 1024 / 1024).toFixed(2)} MB)`);
 console.log('  Kurulum: dosyayı çift tıkla → Claude Desktop bellek klasörünü sorar → hazır.');
