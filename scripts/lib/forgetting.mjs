@@ -6,6 +6,7 @@ import { canonicalJson, eventLogPaths, hashContent, readCommittedState, readEven
 import { acquireLeaseLock, assertLeaseOwned, releaseLeaseLock } from './lock.mjs';
 import { beginTransaction, loadRootContents, populateTransactionFromViews } from './transaction.mjs';
 import { invalidatePack } from './context-pack.mjs';
+import { spoolScrub } from './context-tax.mjs';
 
 function removeEmptyDirectories(directory) {
   if (!fs.existsSync(directory)) return;
@@ -110,6 +111,9 @@ export function scrubForgottenArtifacts(memoryDir, id, text, opts = {}) {
   // hem forgetMemoryLeaf hem resumeForgottenArtifactScrubs buradan geçer).
   // Sonraki loadPack unutulmuş yaprağı zaten içermeyen kaynaktan yeniden üretir.
   invalidatePack(memory);
+  // Spool da türetilmiş kopyadır (park edilmiş cevaplar yaprak metni taşır);
+  // aynı boğazda tamamen boşaltılır — önbellek olduğu için kayıp yoktur.
+  spoolScrub(memory);
   const normalizedText = String(text);
   const needles = [...new Set([normalizedText, normalizedText.replace(/\r?\n/g, '\r\n')])];
   const removed = [];

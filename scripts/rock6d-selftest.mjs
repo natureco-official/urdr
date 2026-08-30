@@ -70,6 +70,7 @@ await test('real MCP client calls namespaced search, append, lint, compiler, and
     'urdr_ask',
     'urdr_compile_plan',
     'urdr_context',
+    'urdr_fetch',
     'urdr_forget_leaf',
     'urdr_lint',
     'urdr_map',

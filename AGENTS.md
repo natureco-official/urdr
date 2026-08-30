@@ -45,6 +45,18 @@ just those leaves) and `urdr_related <leaf-id>` (token-budgeted neighborhood).
 Never load a whole root file for orientation again; `urdr_map` gives the
 skeleton for ~80 tokens when routing.
 
+**Context tax (v1.2+):** every token that enters context is re-read on every
+later request of the session, so the server answers a repeated identical
+query with a ~30-token `unchanged` proof (stamp + spool ref) instead of the
+full body. Trust it: the claim is hash-backed, and a changed tree always
+returns the full body again. If you genuinely lost the earlier reply (e.g.
+after compaction), fetch slices via `urdr_fetch(ref)` or repeat the call
+with `force:true`. Oversized replies are never truncated — they are parked
+whole in the spool and you page through them with `urdr_fetch(ref,
+fromLine, toLine)`. Route your own large command outputs to files too;
+bring only the tail plus a path into context — and record decisions as
+leaves so the next session asks `urdr_ask` instead of re-exploring.
+
 **No MCP (fallback — plain file protocol):**
 
 ```
