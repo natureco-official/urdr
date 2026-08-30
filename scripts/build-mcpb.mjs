@@ -16,8 +16,26 @@ import { execFileSync } from 'node:child_process';
 // Windows'ta npm/npx birer .cmd betiğidir: execFileSync düz adla ENOENT verir,
 // .cmd uzantısı da ancak shell ile çalışır. Tek boğaz — her platformda aynı çağrı.
 const WIN = process.platform === 'win32';
-const runTool = (command, args, options = {}) =>
-  execFileSync(WIN ? `${command}.cmd` : command, args, { ...options, shell: WIN });
+// Kullanıcı/global .npmrc'den TAM izolasyon (saha raporu 2, OpenClaw):
+// allow-scripts gibi politika anahtarları npm'de daha yapılandırma
+// ayrıştırılırken hata verir (--ignore-scripts bile kurtarmaz). Build,
+// boş user/global config + temizlenmiş env ile koşar — makineden makineye
+// aynı davranış, "bende çalışıyor" sınıfı kırılma kalmaz.
+const cleanNpmConfigArgs = () => {          // DIST aşağıda tanımlanır; çağrı anında hazırdır
+  const userRc = path.join(DIST, 'mcpb-user.npmrc');
+  const globalRc = path.join(DIST, 'mcpb-global.npmrc');
+  fs.mkdirSync(DIST, { recursive: true });
+  fs.writeFileSync(userRc, '');
+  fs.writeFileSync(globalRc, '');
+  return ['--userconfig', userRc, '--globalconfig', globalRc];
+};
+const runTool = (command, args, options = {}) => {
+  const env = { ...process.env, ...options.env };
+  for (const key of Object.keys(env)) {
+    if (/^npm_config_allow[-_]scripts$/i.test(key)) delete env[key];
+  }
+  return execFileSync(WIN ? `${command}.cmd` : command, args, { ...options, shell: WIN, env });
+};
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +76,7 @@ fs.writeFileSync(path.join(STAGE, 'server', 'package.json'), JSON.stringify({
 // --ignore-scripts: sahne kurulumunda yaşam-döngüsü betiği çalışmaz — SDK saf
 // JS'tir, gerek yok; kullanıcı .npmrc'sindeki allow-scripts politikaları da
 // (saha raporu: OpenClaw) kurulumu kesemez. Tedarik zinciri hijyeni bonus.
-runTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], {
+runTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts', ...cleanNpmConfigArgs()], {
   cwd: path.join(STAGE, 'server'), stdio: 'inherit',
 });
 
@@ -120,10 +138,10 @@ const manifest = {
 fs.writeFileSync(path.join(STAGE, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
 // ── 4. doğrula + paketle ─────────────────────────────────────────────────────
-runTool('npx', ['-y', '@anthropic-ai/mcpb', 'validate', path.join(STAGE, 'manifest.json')], { stdio: 'inherit' });
+runTool('npx', [...cleanNpmConfigArgs(), '-y', '@anthropic-ai/mcpb', 'validate', path.join(STAGE, 'manifest.json')], { stdio: 'inherit' });
 const out = path.join(DIST, `urdr-memory-${pkg.version}.mcpb`);
 fs.rmSync(out, { force: true });
-runTool('npx', ['-y', '@anthropic-ai/mcpb', 'pack', STAGE, out], { stdio: 'inherit' });
+runTool('npx', [...cleanNpmConfigArgs(), '-y', '@anthropic-ai/mcpb', 'pack', STAGE, out], { stdio: 'inherit' });
 const size = fs.statSync(out).size;
 console.log(`\n✓ ${path.relative(ROOT, out)}  (${(size / 1024 / 1024).toFixed(2)} MB)`);
 console.log('  Kurulum: dosyayı çift tıkla → Claude Desktop bellek klasörünü sorar → hazır.');
